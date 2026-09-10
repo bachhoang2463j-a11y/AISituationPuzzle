@@ -39,3 +39,12 @@
 - 涉及文件：`.gitignore`、`README.md`、`备份（无需阅读）/TurtleSoup.html`、`.git/`。
 - 决策原因：用户确认 `TurtleSoup.html` 为无效设计需彻底抛弃；按 `Coding rule.md` 先建立可追溯的 git 基线，再按 `TurtleSoup_DEVELOPMENT_PLAN.md` 第 1+2 轮重建，避免在错误布局上继续叠加功能。
 - 远端：`origin/main` 已同步至 GitHub，首轮 8 文件 4232 行。
+
+## 2026-09-11：完成第 0+1+2 轮——测试基线、视觉恢复与本地 Mock 闭环
+
+- 变更行为：补做第 0 轮，新建 `integration-test/`（`harness.html` 断言框架、`fixtures/puzzle.yaml`、`fixtures/mock-data.json`、`README.md` 含 DOM 对照清单），mock 酒馆接口注入骨架（内存实现 + 调用计数）与围栏断言就位；第 1 轮，复制 `UI_design.html` 全文为新 `TurtleSoup.html`（唯一起点，未重写），保留全部 DOM/CSS/弹窗/响应式，补便签 `data-note-type` 四类与 `#memo-board`/`#sticky-notes-cluster` 钩子，CDN 保留外链并加本地回退（`avatarFallback` SVG 占位、背景图渐变下层）；第 2 轮——建立最小 `GameState`（phase/soup.surface/records/bubbles/request），`playerSpeak` 与 `triggerSpeakerBubble` 接状态更新，`hostEvaluate` 改造为 `MockAdapter.hostEvaluate`（Promise + 1200ms 延迟），发送防并发，`clearDialogueHistory` 升级为完整重置（恢复初始 demo 记录与气泡）。
+- 涉及文件：`TurtleSoup.html`（新增）、`integration-test/harness.html`、`integration-test/fixtures/puzzle.yaml`、`integration-test/fixtures/mock-data.json`、`integration-test/README.md`、`TurtleSoup_DEVELOPMENT_PLAN.md`（第 0 节补围栏约束、第 1 轮补 CDN 决策、第 5 轮补无 `<Puzzle>` 默认名单、第 6 节更新为第 3 轮指引）、`SPEC.md`（13 节注明施工顺序以分轮计划为准）。
+- 决策原因：旧实现的核心缺陷是视觉偏离与无自动化验收。本轮以复制 `UI_design.html` 为唯一起点杜绝"参照重写"，以 harness 24 项断言（围栏纪律 / 启动与视觉结构 / Mock 闭环三组）把每轮验收从人肉检查变为可回归；交付路径经用户确认为楼层消息渲染器，故产物源码严禁三连反引号并加 harness 断言锁定；CDN 依赖经确认采取保留外链 + 本地回退策略。
+- 验收结果：IAB 中 harness 24/24 断言全绿；桌面 4:1 布局（stage 972 / dialogue 243）与窄屏 860px 断点（移动 Tab 显示、stage/dialogue 视图切换、无水平溢出）几何检查通过；`node` 语法校验与围栏计数（0）通过。待用户真机（真酒馆楼层）导入确认。
+- HASH：`8bf2c52`
+
