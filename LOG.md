@@ -48,3 +48,11 @@
 - 验收结果：IAB 中 harness 24/24 断言全绿；桌面 4:1 布局（stage 972 / dialogue 243）与窄屏 860px 断点（移动 Tab 显示、stage/dialogue 视图切换、无水平溢出）几何检查通过；`node` 语法校验与围栏计数（0）通过。待用户真机（真酒馆楼层）导入确认。
 - HASH：`8bf2c52`
 
+## 2026-09-11：完成第 2A 轮——纯网页直连 LLM 主持人
+
+- 变更行为：经用户确认调整轮次顺序（先纯网页跑通 LLM 连接，不先接酒馆），计划文档插入第 2A 轮定义、原第 3 轮顺延。`TurtleSoup.html` 新增 `DirectApiAdapter`（OpenAI 兼容 `/chat/completions` 直连，`response_format: json_object`，`verdict` 值域校验 `yes|no|irrelevant|critical_yes`），与 `MockAdapter` 同接口；发送时按 `globalApiConfig.baseUrl` 调度，未配置自动回退 Mock；`GameState` 增加内存汤底 `secret.truth`，仅进入主持人请求 system 消息的 `<TURTLE_SECRET>` 区块；请求失败写入可重试的系统错误记录；`critical_yes` 判定标签接入气泡；全局 API 默认 Base URL 改为空，避免默认配置误触发直连。harness 新增第 2A 断言组（8 项：请求协议/鉴权/模型、system 汤底区块、判定写入、公共 DOM 无汤底、请求体无 Key、critical_yes、失败可重试、清空配置回退 Mock 零直连），并把固定 sleep 等待全部改为带超时轮询。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`、`TurtleSoup_DEVELOPMENT_PLAN.md`、`README.md`。
+- 决策原因：用户 2026-09-11 指示"先纯网页跑通 LLM 连接，不用先接入酒馆"。该路径对应 SPEC 12.3 兼容矩阵"生成：`generateRaw` → `generate`；最后才是直接 `fetch`"的预留回退级，属既定架构内的提前实现而非架构变更。调试过程发现并修复 harness 两处自身缺陷：mock fetch 桥漏写 return（responder 的 Promise 被丢弃，请求漏到真实网络）、断言等待目标少算与 IAB timer 节流不兼容——产物代码零返工。
+- 验收结果：IAB 中 harness 32/32 断言全绿（上轮 24 项无回归）。真实 LLM 连接待用户配置自有 API 真机确认。
+- HASH：`6e30f05`
+
