@@ -100,23 +100,14 @@
       throw new Error('等待记录数达到 ' + target + ' 超时，当前 ' + recordCount());
     }
 
-    // ================= 注入产物的 mock 酒馆桥（第 4 轮 TavernAdapter 将消费这些接口） =================
-    const MOCK_BRIDGE = [
+    // ================= 注入产物的 mock 桥（基础桥必注；酒馆桥按测试组选择） =================
+    const BASE_BRIDGE = [
       "window.__appErrors = [];",
       "window.addEventListener('error', function(e){ window.__appErrors.push(String(e.message)); });",
       "window.confirm = function(){ return true; };",
       "window.alert = function(){};",
-      "window.__tavernMock = { calls: { generateRaw: 0, generate: 0, getVariables: 0 } };",
-      "window.getVariables = function(){ window.__tavernMock.calls.getVariables++; return {}; };",
-      "window.replaceVariables = function(){ return true; };",
-      "window.insertOrAssignVariables = function(){ return true; };",
-      "window.getCurrentMessageId = function(){ return 0; };",
-      "window.getChatMessages = function(){ return []; };",
-      "window.generateRaw = async function(){ window.__tavernMock.calls.generateRaw++; return ''; };",
-      "window.generate = async function(){ window.__tavernMock.calls.generate++; return ''; };",
-      "window.eventOn = function(){ return function(){}; };",
-      "window.tavern_events = {};",
       "try { localStorage.removeItem('ai_turtle_global_api'); localStorage.removeItem('ai_turtle_avatar_library'); } catch (e) {}",
+      "window.__tavernMock = { calls: { generateRaw: 0, generate: 0, getVariables: 0 }, generateRawCalls: [], generateRawResponder: null };",
       "window.__fetchMock = { calls: [], responder: null, trace: [] };",
       "window.__realFetch = window.fetch.bind(window);",
       "window.fetch = function(url, opts) {",
@@ -136,6 +127,31 @@
       "};"
     ].join('\n');
 
+    // 完整酒馆助手接口（generateRaw 可编程响应，参数被记录供断言检查）
+    const TAVERN_BRIDGE = [
+      "window.getVariables = function(){ window.__tavernMock.calls.getVariables++; return {}; };",
+      "window.replaceVariables = function(){ return true; };",
+      "window.insertOrAssignVariables = function(){ return true; };",
+      "window.getCurrentMessageId = function(){ return 0; };",
+      "window.getChatMessages = function(){ return []; };",
+      "window.generateRaw = async function(opts) {",
+      "  window.__tavernMock.calls.generateRaw++;",
+      "  window.__tavernMock.generateRawCalls.push(opts);",
+      "  var r = window.__tavernMock.generateRawResponder;",
+      "  if (r) return r(opts);",
+      "  return '';",
+      "};",
+      "window.generate = async function(opts){ window.__tavernMock.calls.generate++; return ''; };",
+      "window.stopGenerationById = async function(){ return true; };",
+      "window.eventOn = function(){ return { stop: function(){} }; };",
+      "window.tavern_events = { CHAT_CHANGED: 'chat_changed', MESSAGE_RECEIVED: 'message_received' };"
+    ].join('\n');
+
+    // 部分能力模式：仅变量接口可用（探测应显示部分可用、整体回退 Mock）
+    const TAVERN_PARTIAL_BRIDGE = [
+      "window.getVariables = function(){ window.__tavernMock.calls.getVariables++; return {}; };"
+    ].join('\n');
+
     let productHtml = '';
 
     async function fetchText(url) {
@@ -144,12 +160,17 @@
       return res.text();
     }
 
-    async function mountApp() {
+    // tavern 选项：'none'（默认，无酒馆接口）/ 'full'（完整接口）/ 'partial'（仅变量接口）
+    async function mountApp(opts) {
+      opts = opts || {};
       productHtml = await fetchText('../TurtleSoup.html');
+      let bridge = BASE_BRIDGE;
+      if (opts.tavern === 'full') bridge = bridge + '\n' + TAVERN_BRIDGE;
+      else if (opts.tavern === 'partial') bridge = bridge + '\n' + TAVERN_PARTIAL_BRIDGE;
       // 注意：'<' + '/script>' 拆写，避免 HTML 解析器把这里的字符串字面量当成 harness 自身 script 块的闭合标签
       const injected = productHtml.replace(
         '<head>',
-        '<head>\n<scr' + 'ipt>' + MOCK_BRIDGE + '</scr' + 'ipt>'
+        '<head>\n<scr' + 'ipt>' + bridge + '</scr' + 'ipt>'
       );
       const frame = document.getElementById('app-frame');
       await new Promise(resolve => {
@@ -473,6 +494,81 @@
       assert(recordCount() === 6, '重置后应回到 6 条，实际 ' + recordCount());
       await sleep(2500); // 等迟到的 Mock 响应到达
       assert(recordCount() === 6, '迟到的响应不应写入记录（实际 ' + recordCount() + ' 条）');
+    });
+
+    // ================= 组 4：TavernAdapter 能力探测与适配（第 4 轮验收） =================
+    const t4 = group('第 4 轮 · TavernAdapter 能力探测与适配');
+
+    t4('完整酒馆接口：能力探测全可用，诊断模式为酒馆助手', async () => {
+      await mountApp({ tavern: 'full' });
+      const d = win().TurtleApp.diagnose();
+      assert(d.available === true, '生成能力可用时 available 应为 true');
+      ['variables', 'messages', 'generation', 'events', 'stop'].forEach(k => {
+        assert(d.capabilities[k] === true, '能力 ' + k + ' 应为可用');
+      });
+      assert(d.mode === '酒馆助手', '未配置 API 时模式应为酒馆助手，实际 ' + d.mode);
+    });
+    t4('Tavern 模式主持人判定：generateRaw 恰好一次，system 含汤底、user 含问题且静默', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = () =>
+        Promise.resolve('{"verdict":"yes","text":"是的，与他的海难经历有关。"}');
+      const base = recordCount();
+      await sendQuestion('海龟汤测试：男子的过去与大海有关吗？');
+      await waitForRecords(base + 2, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 1, 'generateRaw 应恰好调用 1 次，实际 ' + win().__tavernMock.calls.generateRaw);
+      const callOpts = win().__tavernMock.generateRawCalls[0];
+      assert(callOpts.should_silence === true, '生成应为静默（不占用酒馆停止按钮）');
+      const prompts = callOpts.ordered_prompts;
+      assert(prompts[0].role === 'system' && prompts[0].content.includes('<TURTLE_SECRET>') && prompts[0].content.includes(SECRET_MARK), 'system 提示词应含汤底高注意区块');
+      assert(prompts[1].role === 'user' && prompts[1].content.includes('男子的过去与大海有关吗？'), 'user 提示词应含玩家问题');
+      const last = lastRecord();
+      assert(last.classList.contains('is-verdict') && last.querySelector('.item-text').textContent.includes('海难'), '判定记录未正确写入');
+    });
+    t4('调度优先级：显式配置 API 时直连优先于酒馆助手', async () => {
+      await mountApp({ tavern: 'full' });
+      configureApiViaUi('https://mock-llm.example.com/v1', 'sk-test-4', 'mock-model-x');
+      setLlmResponder(() => mockLlmResponse('{"verdict":"no","text":"否，与毒药无关。"}'));
+      const base = recordCount();
+      await sendQuestion('优先级测试：汤里有毒吗？');
+      await waitForRecords(base + 2, 30000);
+      assert(win().__fetchMock.calls.length === 1, '应走直连 fetch（实际 ' + win().__fetchMock.calls.length + ' 次）');
+      assert(win().__tavernMock.calls.generateRaw === 0, '不应调用 generateRaw');
+    });
+    t4('generateRaw 失败：显示可操作错误且可直接重试成功', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = () => Promise.reject(new Error('酒馆生成失败'));
+      const base = recordCount();
+      await sendQuestion('失败测试：酒馆会拒绝吗？');
+      await waitForRecords(base + 2, 30000);
+      const last = lastRecord();
+      assert(last.querySelector('.item-speaker').textContent.includes('系统'), '失败应产生系统错误记录');
+      assert(last.querySelector('.item-text').textContent.includes('酒馆生成失败'), '错误信息未透出');
+
+      win().__tavernMock.generateRawResponder = () =>
+        Promise.resolve('{"verdict":"irrelevant","text":"与此无关。"}');
+      await sendQuestion('重试测试：再问一次？');
+      await waitForRecords(base + 4, 30000);
+      assert(lastRecord().classList.contains('is-verdict'), '重试应成功产生判定记录');
+    });
+    t4('部分能力缺失（仅变量接口）：整体回退 Mock 闭环，不白屏', async () => {
+      await mountApp({ tavern: 'partial' });
+      const d = win().TurtleApp.diagnose();
+      assert(d.available === false, '仅变量接口时不应判定为可用');
+      assert(d.capabilities.variables === true && d.capabilities.generation === false, '能力探测结果不符');
+      assert(d.mode === '本地演示', '模式应为本地演示，实际 ' + d.mode);
+      const base = recordCount();
+      await sendQuestion('降级测试：还能玩吗？');
+      await waitForRecords(base + 2, 30000);
+      assert(recordCount() === base + 2, 'Mock 闭环应完整可用（+' + (recordCount() - base) + '）');
+      assert(win().__tavernMock.calls.generateRaw === 0, '不应调用生成接口');
+    });
+    t4('诊断 UI：设置弹窗显示能力标记与当前主持人模式', async () => {
+      await mountApp({ tavern: 'full' });
+      win().openSettingsModal();
+      const text = doc().getElementById('env-diagnosis').textContent;
+      assert(text.includes('生成✓') && text.includes('变量✓'), '诊断应显示能力可用标记: ' + text);
+      assert(text.includes('酒馆助手'), '诊断应显示主持人模式: ' + text);
+      win().closeSettingsModal();
     });
 
     // ================= 运行与渲染 =================

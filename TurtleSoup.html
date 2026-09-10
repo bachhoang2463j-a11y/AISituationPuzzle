@@ -1937,6 +1937,13 @@
             <button class="modal-btn btn-secondary" style="padding: 0.32rem 0.85rem; font-size: 0.76rem;" onclick="clearDialogueHistory()">清空记录</button>
           </div>
 
+          <div class="settings-item">
+            <div>
+              <div class="settings-title">运行环境诊断</div>
+              <div class="settings-desc" id="env-diagnosis">未检测</div>
+            </div>
+          </div>
+
           <!-- 头像库 URL 管理 -->
           <div class="settings-avatar-mgr">
             <div class="settings-mgr-header">
@@ -2197,6 +2204,8 @@
     // --- 初始化 ---
     document.addEventListener("DOMContentLoaded", () => {
       snapshotInitialBubbles();
+      TavernAdapter.detect();
+      renderDiagnosis();
       render();
       bindInputEvents();
     });
@@ -2350,6 +2359,7 @@
     // --- 系统设置弹窗逻辑 ---
     function openSettingsModal() {
       renderAvatarLibraryInSettings();
+      renderDiagnosis();
       document.getElementById("settings-modal-overlay").classList.add("active");
     }
 
@@ -2453,7 +2463,7 @@
         dispatch({ type: GameAction.SUBMIT_QUESTION, text: text });
         const request = GameState.request;
 
-        const adapter = globalApiConfig.baseUrl ? DirectApiAdapter : MockAdapter;
+        const adapter = pickHostAdapter();
         try {
           const answer = await adapter.hostEvaluate(text);
           if (GameState.request !== request) return; // 请求已被重置放弃
@@ -2607,6 +2617,103 @@
         bubbles: GameState.bubbles
       });
     }
+
+    // --- 第 4 轮：TavernAdapter 酒馆适配层（能力探测 + 接口统一） ---
+    // 游戏逻辑只通过本适配层触达 window 下的酒馆函数；接口缺失时抛错由调用方回退，不白屏
+    const TavernAdapter = {
+      name: "tavern",
+      capabilities: null,
+      available: false,
+
+      detect() {
+        this.capabilities = {
+          variables: typeof window.getVariables === "function" || typeof window.replaceVariables === "function",
+          messages: typeof window.getChatMessages === "function",
+          generation: typeof window.generateRaw === "function" || typeof window.generate === "function",
+          events: typeof window.eventOn === "function" && !!window.tavern_events,
+          stop: typeof window.stopGenerationById === "function"
+        };
+        // 主持人判定的最低要求是生成能力；其余能力缺失只影响对应功能，不阻塞启动
+        this.available = this.capabilities.generation;
+        return this.capabilities;
+      },
+
+      // 以下方法统一 Promise/同步返回值差异：内部一律返回 Promise，失败 reject
+      async getChatMessages(range, option) {
+        if (!this.capabilities.messages) throw new Error("酒馆助手消息接口不可用");
+        return await Promise.resolve(window.getChatMessages(range, option || {}));
+      },
+
+      async getVariables(scope) {
+        if (!this.capabilities.variables) throw new Error("酒馆助手变量接口不可用");
+        return await Promise.resolve(window.getVariables({ type: scope || "global" }));
+      },
+
+      async generate(prompts, options) {
+        if (!this.available) throw new Error("酒馆助手生成接口不可用");
+        const fn = typeof window.generateRaw === "function" ? window.generateRaw : window.generate;
+        const config = {
+          ordered_prompts: prompts,
+          should_silence: true // 海龟汤主持人为后台判定，不占用酒馆发送/停止按钮
+        };
+        if (options && options.generationId) config.generation_id = options.generationId;
+        const result = await fn(config);
+        if (typeof result !== "string") throw new Error("生成返回了非文本结果");
+        return result;
+      },
+
+      async stop(generationId) {
+        if (!this.capabilities.stop) throw new Error("酒馆助手停止接口不可用");
+        return await Promise.resolve(window.stopGenerationById(generationId));
+      },
+
+      on(eventType, listener) {
+        if (!this.capabilities.events) throw new Error("酒馆助手事件接口不可用");
+        return window.eventOn(eventType, listener);
+      },
+
+      // 主持人判定：与 DirectApiAdapter / MockAdapter 同接口
+      async hostEvaluate(questionText) {
+        const prompts = [
+          { role: "system", content: buildHostSystemPrompt() },
+          { role: "user", content: buildHostUserPrompt(questionText) }
+        ];
+        const raw = await this.generate(prompts, { generationId: "turtle-host-" + Date.now() });
+        return parseHostAnswer(raw);
+      }
+    };
+
+    // 主持人适配器三级调度：显式配置的直连 API > 酒馆助手 > 本地演示
+    function pickHostAdapter() {
+      if (globalApiConfig.baseUrl) return DirectApiAdapter;
+      if (TavernAdapter.available) return TavernAdapter;
+      return MockAdapter;
+    }
+
+    function hostModeName() {
+      const adapter = pickHostAdapter();
+      return adapter === DirectApiAdapter ? "直连 API" : (adapter === TavernAdapter ? "酒馆助手" : "本地演示");
+    }
+
+    function renderDiagnosis() {
+      const caps = TavernAdapter.capabilities || {};
+      const mark = ok => ok ? "✓" : "✗";
+      const text = "酒馆接口：变量" + mark(caps.variables) + " · 消息" + mark(caps.messages) +
+        " · 生成" + mark(caps.generation) + " · 事件" + mark(caps.events) + " · 停止" + mark(caps.stop) +
+        "；主持人模式：" + hostModeName();
+      const el = document.getElementById("env-diagnosis");
+      if (el) el.textContent = text;
+      const badge = document.querySelector(".meta-badge");
+      if (badge) badge.title = "海龟汤运行环境：主持人 = " + hostModeName();
+    }
+
+    // 对外调试/测试接口（黑盒探测用，不承载游戏逻辑）
+    window.TurtleApp = {
+      diagnose: function () {
+        return { capabilities: TavernAdapter.capabilities, available: TavernAdapter.available, mode: hostModeName() };
+      },
+      serializeState: serializeState
+    };
 
     // --- MockAdapter：无酒馆接口时的演示裁判，第 4 轮由 TavernAdapter 同接口替换 ---
     const MockAdapter = {
