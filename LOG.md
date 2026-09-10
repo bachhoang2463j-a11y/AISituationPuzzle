@@ -32,3 +32,10 @@
 - 实现内容：读取 `<Puzzle>`、按姓名加载世界书/聊天角色资料、生成汤面汤底、主持人秘密区块、真实/简单伙伴模式、50% 发言抽样、主持人单次聚合回答、随机总结者便签操作、玩家便签编辑和输入级闲聊模式。
 - 兼容策略：优先 `generateRaw`，回退 `generate + injects`；支持 `getChatMessages`、`getWorldbook`、`getChatWorldbookName`、`getCharWorldbookNames`、变量读写、请求 ID 和停止生成；无酒馆接口时进入手动降级显示。
 - 安全边界：汤底只在内存和解题型主持人请求中使用；闲聊模式不注入汤底；API Key 仅运行时使用，不写入持久化变量。
+
+## 2026-09-11：废弃无效实现并初始化仓库
+
+- 变更行为：初始化 git 仓库，分支 `main` 关联 `https://github.com/bachhoang2463j-a11y/AISituationPuzzle` 并推送首轮提交 `302025b`；将无效的 `TurtleSoup.html` 移入 `备份（无需阅读）/` 并加入 `.gitignore` 不再跟踪；新增 `README.md` 作为现状说明，确认以 `UI_design.html` 为唯一视觉基线。
+- 涉及文件：`.gitignore`、`README.md`、`备份（无需阅读）/TurtleSoup.html`、`.git/`。
+- 决策原因：用户确认 `TurtleSoup.html` 为无效设计需彻底抛弃；按 `Coding rule.md` 先建立可追溯的 git 基线，再按 `TurtleSoup_DEVELOPMENT_PLAN.md` 第 1+2 轮重建，避免在错误布局上继续叠加功能。
+- 远端：`origin/main` 已同步至 GitHub，首轮 8 文件 4232 行。
