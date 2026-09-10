@@ -2180,13 +2180,15 @@
 
     // --- 最小游戏状态：内存唯一数据源，字段命名对齐 SPEC 第 4 章 ---
     const GameState = {
+      schemaVersion: 1,
       phase: "awaiting-player",       // awaiting-player | host-thinking
+      turn: 0,                        // 玩家已发起的提问回合数
       soup: { surface: "男子走进一家餐厅点了一碗海龟汤，尝了一口后，冲出餐厅自杀了。为什么？" },
       secret: { truth: "男子曾遭遇海难，同伴割下自己的肉谎称是海龟肉救了他；他在餐厅尝到真正的海龟汤后明白真相，愧疚崩溃自杀。" }, // 仅进入主持人请求，永不进入公共状态与 UI
       records: INITIAL_RECORDS.map(record => ({ ...record })),
       bubbles: {},                    // charId -> 最近气泡内容
       initialBubbles: {},             // 启动时从 DOM 快照，重置时恢复
-      request: null                   // 进行中的请求标识，非空时拒绝新请求
+      request: null                   // 进行中请求 { id, type, startedAt, abortRequested }，非空时拒绝新请求
     };
 
     let currentEditingCharId = null;
@@ -2195,7 +2197,7 @@
     // --- 初始化 ---
     document.addEventListener("DOMContentLoaded", () => {
       snapshotInitialBubbles();
-      renderDialogueList();
+      render();
       bindInputEvents();
     });
 
@@ -2357,34 +2359,8 @@
 
     function clearDialogueHistory() {
       if (confirm("确定要清空本局的所有对话推演记录吗？")) {
-        resetGame();
+        dispatch({ type: GameAction.RESET_GAME });
       }
-    }
-
-    // 重置：恢复初始 demo 状态（记录、气泡、阶段、请求）
-    function resetGame() {
-      GameState.records = INITIAL_RECORDS.map(record => ({ ...record }));
-      GameState.phase = "awaiting-player";
-      GameState.request = null;
-
-      ["host", "ai-1", "ai-2", "ai-3", "player"].forEach(charId => {
-        const bubble = document.getElementById(`bubble-${charId}`);
-        const snap = GameState.initialBubbles[charId];
-        if (!bubble || !snap) return;
-        const roleEl = bubble.querySelector(".bubble-role");
-        const verdictEl = bubble.querySelector(".bubble-verdict");
-        const contentEl = bubble.querySelector(".bubble-content");
-        if (roleEl) roleEl.textContent = snap.role;
-        if (verdictEl) {
-          verdictEl.className = snap.verdictClass;
-          verdictEl.textContent = snap.verdict;
-        }
-        if (contentEl) contentEl.textContent = snap.content;
-        delete GameState.bubbles[charId];
-      });
-
-      document.querySelectorAll(".seat-node").forEach(n => n.classList.remove("speaking"));
-      renderDialogueList();
     }
 
     // --- 移动端视图切换 ---
@@ -2465,26 +2441,26 @@
     function bindInputEvents() {
       const sendBtn = document.getElementById("btn-send");
       const inputEl = document.getElementById("player-input");
+      if (sendBtn.dataset.bound === "1") return; // 防重复绑定
+      sendBtn.dataset.bound = "1";
 
       async function handleSend() {
         const text = inputEl.value.trim();
         if (!text) return;
-        if (GameState.request) return; // 请求进行中，拒绝并发发送
+        if (GameState.phase !== "awaiting-player" || GameState.request) return; // 阶段守卫：非法阶段不触发新回合
 
-        playerSpeak(text);
         inputEl.value = "";
+        dispatch({ type: GameAction.SUBMIT_QUESTION, text: text });
+        const request = GameState.request;
 
-        GameState.request = "host-evaluate";
-        GameState.phase = "host-thinking";
         const adapter = globalApiConfig.baseUrl ? DirectApiAdapter : MockAdapter;
         try {
           const answer = await adapter.hostEvaluate(text);
-          hostRespond(answer);
+          if (GameState.request !== request) return; // 请求已被重置放弃
+          dispatch({ type: GameAction.HOST_ANSWERED, answer: answer });
         } catch (err) {
-          reportHostError(err);
-        } finally {
-          GameState.request = null;
-          GameState.phase = "awaiting-player";
+          if (GameState.request !== request) return;
+          dispatch({ type: GameAction.HOST_FAILED, error: err });
         }
       }
 
@@ -2494,18 +2470,142 @@
       });
     }
 
-    function playerSpeak(text) {
-      triggerSpeakerBubble("player", "我", text);
+    // --- 第 3 轮：Action -> Store -> View 单向流程 ---
+    const GameAction = {
+      SUBMIT_QUESTION: "submit-question",
+      HOST_ANSWERED: "host-answered",
+      HOST_FAILED: "host-failed",
+      RESET_GAME: "reset-game"
+    };
 
-      GameState.records.push({
-        id: Date.now(),
-        speakerId: "player",
-        speakerName: "我 (YOU)",
-        text: text,
-        type: "question",
-        verdict: null
-      });
+    let requestSeq = 0;
+
+    // 唯一的状态变更入口：处理动作、更新 GameState、触发一次渲染
+    function dispatch(action) {
+      switch (action.type) {
+        case GameAction.SUBMIT_QUESTION:
+          GameState.turn += 1;
+          GameState.records.push({
+            id: Date.now(),
+            speakerId: "player",
+            speakerName: "我 (YOU)",
+            text: action.text,
+            type: "question",
+            verdict: null
+          });
+          setBubbleState("player", "我", action.text, null);
+          GameState.phase = "host-thinking";
+          GameState.request = { id: "req-" + (++requestSeq), type: "host-evaluate", startedAt: Date.now(), abortRequested: false };
+          triggerSpeakingFx("player");
+          break;
+
+        case GameAction.HOST_ANSWERED: {
+          const verdict = action.answer.verdict;
+          const verdictLabel = action.answer.verdictLabel;
+          const replyText = verdictLabel + " " + action.answer.hostReply;
+          GameState.records.push({
+            id: Date.now() + 1,
+            speakerId: "host",
+            speakerName: charactersData.host.name,
+            text: replyText,
+            type: "verdict",
+            verdict: verdict,
+            verdictLabel: verdictLabel
+          });
+          setBubbleState("host", charactersData.host.name, replyText, verdict);
+          GameState.request = null;
+          GameState.phase = "awaiting-player";
+          triggerSpeakingFx("host");
+          break;
+        }
+
+        case GameAction.HOST_FAILED:
+          GameState.records.push({
+            id: Date.now() + 2,
+            speakerId: "system",
+            speakerName: "系统",
+            text: "主持人请求失败：" + (action.error && action.error.message ? action.error.message : "未知错误") + "。可直接重试；清空 API 配置后将回退本地演示裁判。",
+            type: "system",
+            verdict: null
+          });
+          GameState.request = null;
+          GameState.phase = "awaiting-player";
+          break;
+
+        case GameAction.RESET_GAME:
+          GameState.records = INITIAL_RECORDS.map(record => ({ ...record }));
+          GameState.bubbles = {};
+          GameState.phase = "awaiting-player";
+          GameState.turn = 0;
+          GameState.request = null; // 放弃进行中的请求，其迟到响应会被 handleSend 丢弃
+          break;
+      }
+      render();
+    }
+
+    function setBubbleState(charId, title, content, verdictType) {
+      GameState.bubbles[charId] = { title: title, content: content, verdict: verdictType };
+    }
+
+    // --- View 层：统一渲染入口（幂等，可安全重复调用） ---
+    function render() {
       renderDialogueList();
+      renderBubbles();
+    }
+
+    function renderBubbles() {
+      ["host", "ai-1", "ai-2", "ai-3", "player"].forEach(charId => {
+        const bubble = document.getElementById("bubble-" + charId);
+        if (!bubble) return;
+        const state = GameState.bubbles[charId] || GameState.initialBubbles[charId];
+        if (!state) return;
+        const roleEl = bubble.querySelector(".bubble-role");
+        const verdictEl = bubble.querySelector(".bubble-verdict");
+        const contentEl = bubble.querySelector(".bubble-content");
+        if (roleEl) roleEl.textContent = state.title || state.role;
+        if (contentEl) contentEl.textContent = state.content;
+        if (verdictEl) renderBubbleVerdict(verdictEl, state);
+      });
+    }
+
+    function renderBubbleVerdict(verdictEl, state) {
+      const verdictType = state.verdict;
+      if (verdictType === "yes" || verdictType === "critical_yes") {
+        verdictEl.className = "bubble-verdict tag-yes";
+        verdictEl.textContent = VERDICT_LABELS[verdictType];
+      } else if (verdictType === "no") {
+        verdictEl.className = "bubble-verdict tag-no";
+        verdictEl.textContent = VERDICT_LABELS.no;
+      } else if (verdictType === "irrelevant") {
+        verdictEl.className = "bubble-verdict tag-irrelevant";
+        verdictEl.textContent = VERDICT_LABELS.irrelevant;
+      } else {
+        // 重置后的初始快照：直接恢复原 class 与文本
+        verdictEl.className = state.verdictClass || "bubble-verdict";
+        verdictEl.textContent = state.verdict || "";
+      }
+    }
+
+    // 发言动画属于 View 副作用，不进入状态
+    function triggerSpeakingFx(charId) {
+      const node = document.getElementById("seat-" + charId);
+      if (!node) return;
+      document.querySelectorAll(".seat-node").forEach(n => n.classList.remove("speaking"));
+      node.classList.add("speaking");
+      setTimeout(() => node.classList.remove("speaking"), 4500);
+    }
+
+    // 调试用状态序列化：不含汤底与 API 配置（防泄漏），不写入任何酒馆变量
+    function serializeState() {
+      return JSON.stringify({
+        schemaVersion: GameState.schemaVersion,
+        phase: GameState.phase,
+        turn: GameState.turn,
+        soup: GameState.soup,
+        records: GameState.records,
+        request: GameState.request,
+        bubbles: GameState.bubbles
+      });
     }
 
     // --- MockAdapter：无酒馆接口时的演示裁判，第 4 轮由 TavernAdapter 同接口替换 ---
@@ -2616,74 +2716,6 @@
         throw new Error("响应字段非法（verdict: " + verdict + "）");
       }
       return { verdict: verdict, verdictLabel: VERDICT_LABELS[verdict], hostReply: text };
-    }
-
-    function reportHostError(err) {
-      GameState.records.push({
-        id: Date.now() + 2,
-        speakerId: "system",
-        speakerName: "系统",
-        text: "主持人请求失败：" + (err && err.message ? err.message : "未知错误") + "。可直接重试；清空 API 配置后将回退本地演示裁判。",
-        type: "system",
-        verdict: null
-      });
-      renderDialogueList();
-    }
-
-    function hostRespond(answer) {
-      const { verdict, verdictLabel, hostReply } = answer;
-      triggerSpeakerBubble("host", charactersData.host.name, `${verdictLabel} ${hostReply}`, verdict);
-
-      GameState.records.push({
-        id: Date.now() + 1,
-        speakerId: "host",
-        speakerName: charactersData.host.name,
-        text: `${verdictLabel} ${hostReply}`,
-        type: "verdict",
-        verdict: verdict,
-        verdictLabel: verdictLabel
-      });
-      renderDialogueList();
-    }
-
-    function triggerSpeakerBubble(charId, speakerTitle, content, verdictType = null) {
-      const node = document.getElementById(`seat-${charId}`);
-      const bubble = document.getElementById(`bubble-${charId}`);
-      if (!node || !bubble) return;
-
-      document.querySelectorAll(".seat-node").forEach(n => n.classList.remove("speaking"));
-      node.classList.add("speaking");
-
-      const headerRole = bubble.querySelector(".bubble-role");
-      const headerVerdict = bubble.querySelector(".bubble-verdict");
-      const contentEl = bubble.querySelector(".bubble-content");
-
-      if (headerRole) headerRole.textContent = speakerTitle;
-      if (contentEl) contentEl.textContent = content;
-
-      GameState.bubbles[charId] = { title: speakerTitle, content: content, verdict: verdictType };
-
-      if (headerVerdict) {
-        if (verdictType === "critical_yes") {
-          headerVerdict.className = "bubble-verdict tag-yes";
-          headerVerdict.textContent = VERDICT_LABELS.critical_yes;
-        } else if (verdictType === "yes") {
-          headerVerdict.className = "bubble-verdict tag-yes";
-          headerVerdict.textContent = "【是】";
-        } else if (verdictType === "no") {
-          headerVerdict.className = "bubble-verdict tag-no";
-          headerVerdict.textContent = "【否】";
-        } else if (verdictType === "irrelevant") {
-          headerVerdict.className = "bubble-verdict tag-irrelevant";
-          headerVerdict.textContent = "【无关】";
-        } else {
-          headerVerdict.textContent = "";
-        }
-      }
-
-      setTimeout(() => {
-        node.classList.remove("speaking");
-      }, 4500);
     }
 
     // --- AI 人设模态弹窗逻辑 (含角色专属 API 配置) ---

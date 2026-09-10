@@ -425,6 +425,56 @@
       assert(win().__fetchMock.calls.length === callsBefore, '清空配置后不应再发出直连请求');
     });
 
+    // ================= 组 3：状态模型与 View/Action 分离（第 3 轮验收） =================
+    const t3 = group('第 3 轮 · 状态模型与 View/Action 分离');
+
+    t3('重复调用 bindInputEvents 不会重复绑定（一次发送只产生一条玩家记录）', async () => {
+      win().clearDialogueHistory(); // 建立干净基线（confirm 已放行）
+      win().bindInputEvents();      // 第二次绑定应被防护
+      const base = recordCount();
+      await sendQuestion('重复绑定测试：男子会做饭吗？');
+      await waitForRecords(base + 2, 30000);
+      assert(recordCount() === base + 2, '应恰好 1 问 1 答（+' + (recordCount() - base) + '）');
+    });
+    t3('render() 幂等：不重复追加记录、不丢失输入内容', async () => {
+      const input = doc().getElementById('player-input');
+      input.value = '未发送的草稿文本';
+      const base = recordCount();
+      win().render();
+      win().render();
+      assert(recordCount() === base, '重复 render 不应追加记录');
+      assert(input.value === '未发送的草稿文本', 'render 后输入内容丢失');
+      input.value = '';
+    });
+    t3('serializeState() 可解析：含 phase/turn/records，不含汤底与 Key，不触发酒馆接口', async () => {
+      const tavernCallsBefore = win().__tavernMock.calls.generateRaw + win().__tavernMock.calls.generate;
+      const raw = win().serializeState();
+      const parsed = JSON.parse(raw);
+      assert(parsed.phase && typeof parsed.turn === 'number' && Array.isArray(parsed.records), '序列化字段缺失');
+      assert(parsed.schemaVersion === 1, 'schemaVersion 应为 1');
+      assert(!raw.includes(SECRET_MARK), '序列化结果泄露汤底');
+      assert(!raw.includes('sk-test'), '序列化结果泄露 API Key');
+      const tavernCallsAfter = win().__tavernMock.calls.generateRaw + win().__tavernMock.calls.generate;
+      assert(tavernCallsAfter === tavernCallsBefore, '序列化不应触发酒馆生成接口');
+    });
+    t3('turn 计数随玩家发送递增', async () => {
+      const before = JSON.parse(win().serializeState()).turn;
+      const base = recordCount();
+      await sendQuestion('回合计数测试：汤是热的吗？');
+      await waitForRecords(base + 2, 30000);
+      const after = JSON.parse(win().serializeState()).turn;
+      assert(after === before + 1, 'turn 应 +1（' + before + ' -> ' + after + '）');
+    });
+    t3('请求进行中重置：迟到的主持人响应被丢弃', async () => {
+      const base = recordCount();
+      await sendQuestion('会被放弃的问题：男子戴眼镜吗？');
+      await sleep(300); // Mock 裁判请求进行中（1200ms 延迟）
+      win().clearDialogueHistory(); // 重置放弃进行中的请求
+      assert(recordCount() === 6, '重置后应回到 6 条，实际 ' + recordCount());
+      await sleep(2500); // 等迟到的 Mock 响应到达
+      assert(recordCount() === 6, '迟到的响应不应写入记录（实际 ' + recordCount() + ' 条）');
+    });
+
     // ================= 运行与渲染 =================
     function renderSkeleton() {
       const container = document.getElementById('groups');
