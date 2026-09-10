@@ -88,3 +88,11 @@
 - 验收结果：IAB 中 harness 54/54 断言全绿（上轮 49 项零回归；新增：停止按钮状态切换与 stopGenerationById 调用、v1 判定与提问共享 question_id、ID 不匹配整条拒绝可重试、缺 answer 字段拒绝、超时回到可操作且可重试）。
 - HASH：`44edc56`
 
+## 2026-09-11：完成第 7 轮——单个 AI 伙伴与最小多角色状态机
+
+- 变更行为：`TurtleSoup.html` 引入三阶段回合状态机 `awaiting-player -> peer-thinking -> host-thinking -> awaiting-player`：玩家发送后先由 ai-1 伙伴独立请求一次公开发言（`peer-speech-v1` 协议：`actor_id` 校验 + text 非空），发言作为提问入公开记录并分配独立 `question_id` 加入本轮账本；伙伴失败不阻塞（系统记录后直接进入主持人阶段）。主持人协议升级为 `host-answer-v2` 聚合形态：一次请求的 `answers` 数组必须覆盖本轮账本每个 `question_id` 恰好一次（漏答、重复、未知 ID、verdict 非法、answer 空——任一不符整批拒绝），逐条写入判定记录，气泡展示玩家问题的判定。三个适配器（Mock/Direct/Tavern）均新增 `peerEvaluate` 并将 `hostEvaluate` v2 化；伙伴提示词只含汤面、公开记录与角色人设，绝不接触汤底；停止覆盖两阶段（`<回合ID>-peer` / `<回合ID>-host` 双 ID 停止 + AbortController 跨阶段复用）。harness 全部 responder 升级为智能 v2 版（按 system 提示词区分 peer/host、从 user 提示词动态提取账本），既有断言计数按"每次发送 = 伙伴+主持人两次请求、完整回合 4 条记录"调整，新增第 7 轮断言组 4 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`。
+- 决策原因：计划第 7 轮验证最小多角色状态机。主持人协议直接做 v2 聚合（SPEC 4.2 终态方向），避免 v1 单答案到多答案的二次迁移成本；伙伴发言固定为"提出一个有助于解题的问题"并入账本，使聚合校验在第 7 轮即可完整落地。调试中修正两处 harness 断言自身问题：第 2 轮"重复点击防并发"断言的语义过时（第 6 轮起请求中点击已是停止语义，更新断言验证"重复点击停止回合且不产生第二个回答"）、组 6 伪造 ID 断言的 responder 替换时机过晚（Tavern mock 微任务级响应，改为发送前预设）。产物代码零返工。
+- 验收结果：IAB 中 harness 58/58 断言全绿（上轮 54 项零回归；新增：完整回合顺序与伙伴气泡、伙伴请求 system+user 双向无汤底、伙伴失败跳过后主持人仍回答玩家问题、停止后回到 awaiting-player 且无自动续轮）。
+- HASH：`4c8e4ab`
+
