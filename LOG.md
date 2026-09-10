@@ -56,3 +56,11 @@
 - 验收结果：IAB 中 harness 32/32 断言全绿（上轮 24 项无回归）。真实 LLM 连接待用户配置自有 API 真机确认。
 - HASH：`6e30f05`
 
+## 2026-09-11：完成第 3 轮——状态模型与 View/Action 分离
+
+- 变更行为：`TurtleSoup.html` 建立单向流程 `Action -> Store -> View`：新增 `GameAction` 枚举与 `dispatch()` 作为唯一状态变更入口（提交问题 / 主持人回答 / 主持人失败 / 重置四类动作），`render()` 统一渲染入口（记录列表 + 气泡，幂等可重复调用），气泡内容改为 `renderBubbles()` 从 `GameState.bubbles` 或初始快照渲染，发言动画拆为纯 View 副作用 `triggerSpeakingFx()`；`GameState` 增加 `schemaVersion`、`turn` 回合计数，`request` 对象化（`id`/`type`/`startedAt`/`abortRequested`，重置即放弃进行中请求，迟到响应被丢弃）；发送入口加阶段守卫（`phase !== awaiting-player` 或请求进行中均拒绝）；`bindInputEvents` 加防重复绑定防护；新增 `serializeState()` 调试序列化（不含汤底与 API 配置，不触发酒馆接口）。删除 `playerSpeak`/`hostRespond`/`reportHostError`/`resetGame`/`triggerSpeakerBubble`（逻辑全部并入 dispatch 与 View 层）。harness 新增第 3 轮断言组 5 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`。
+- 决策原因：按计划第 3 轮把 UI 渲染与游戏状态分开，为第 4 轮 TavernAdapter 接入（届时状态层不再被重写）打地基；纯重构轮，不新增用户功能、不改 Mock 与直连问答的外部行为，既有 32 项断言即回归锁。
+- 验收结果：IAB 中 harness 37/37 断言全绿（上轮 32 项零回归；新增：防重复绑定、render 幂等不丢输入、序列化含 phase/turn/records 且不含汤底与 Key、turn 随发送递增、请求进行中重置后迟到响应被丢弃）。
+- HASH：`9e7b854`
+
