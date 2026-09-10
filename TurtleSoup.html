@@ -2455,6 +2455,11 @@
       if (sendBtn.dataset.bound === "1") return; // 防重复绑定
       sendBtn.dataset.bound = "1";
 
+      function handleClick() {
+        if (GameState.request) { stopHostRequest(); return; } // 请求进行中：发送按钮即停止按钮
+        handleSend();
+      }
+
       async function handleSend() {
         const text = inputEl.value.trim();
         if (!text) return;
@@ -2463,11 +2468,24 @@
         inputEl.value = "";
         dispatch({ type: GameAction.SUBMIT_QUESTION, text: text });
         const request = GameState.request;
+        render(); // 立即刷新发送按钮为停止态
 
         const adapter = pickHostAdapter();
+        const controller = (typeof AbortController === "function") ? new AbortController() : null;
+        if (controller) request.abortController = controller;
+        const timeoutMs = (window.TurtleApp.debug && window.TurtleApp.debug.hostTimeoutMs) || HOST_TIMEOUT_MS;
+        request.timeoutId = setTimeout(() => {
+          if (GameState.request === request) {
+            dispatch({ type: GameAction.HOST_FAILED, error: new Error("主持人请求超时（" + Math.round(timeoutMs / 1000) + " 秒）") });
+          }
+        }, timeoutMs);
+
         try {
-          const answer = await adapter.hostEvaluate(text);
-          if (GameState.request !== request) return; // 请求已被重置放弃
+          const answer = await adapter.hostEvaluate(text, {
+            generationId: request.id,
+            signal: controller ? controller.signal : undefined
+          });
+          if (GameState.request !== request) return; // 请求已被重置或停止，丢弃迟到响应
           dispatch({ type: GameAction.HOST_ANSWERED, answer: answer });
         } catch (err) {
           if (GameState.request !== request) return;
@@ -2475,17 +2493,36 @@
         }
       }
 
-      sendBtn.addEventListener("click", handleSend);
+      sendBtn.addEventListener("click", handleClick);
       inputEl.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") handleSend();
+        if (e.key === "Enter") handleClick();
       });
     }
 
+    // 停止进行中的主持人请求：本地立即回到可操作状态，并尽力中断底层生成
+    async function stopHostRequest() {
+      const request = GameState.request;
+      if (!request) return;
+      if (request.abortController) {
+        try { request.abortController.abort(); } catch (e) {}
+      }
+      const adapter = pickHostAdapter();
+      if (adapter === TavernAdapter && TavernAdapter.capabilities.stop) {
+        try { await TavernAdapter.stop(request.id); } catch (e) {}
+      }
+      if (GameState.request === request) {
+        dispatch({ type: GameAction.HOST_ABORTED });
+      }
+    }
+
     // --- 第 3 轮：Action -> Store -> View 单向流程 ---
+    const HOST_TIMEOUT_MS = 60000; // 主持人请求超时阈值（测试可经 TurtleApp.debug.hostTimeoutMs 缩短）
+
     const GameAction = {
       SUBMIT_QUESTION: "submit-question",
       HOST_ANSWERED: "host-answered",
       HOST_FAILED: "host-failed",
+      HOST_ABORTED: "host-aborted",
       RESET_GAME: "reset-game",
       APPLY_CAST: "apply-cast"
     };
@@ -2503,11 +2540,12 @@
             speakerName: "我 (YOU)",
             text: action.text,
             type: "question",
-            verdict: null
+            verdict: null,
+            questionId: "q-" + (requestSeq + 1)
           });
           setBubbleState("player", "我", action.text, null);
           GameState.phase = "host-thinking";
-          GameState.request = { id: "req-" + (++requestSeq), type: "host-evaluate", startedAt: Date.now(), abortRequested: false };
+          GameState.request = { id: "q-" + (++requestSeq), type: "host-evaluate", startedAt: Date.now(), abortRequested: false, timeoutId: null, abortController: null };
           triggerSpeakingFx("player");
           break;
 
@@ -2515,6 +2553,7 @@
           const verdict = action.answer.verdict;
           const verdictLabel = action.answer.verdictLabel;
           const replyText = verdictLabel + " " + action.answer.hostReply;
+          if (GameState.request) clearTimeout(GameState.request.timeoutId);
           GameState.records.push({
             id: Date.now() + 1,
             speakerId: "host",
@@ -2522,7 +2561,8 @@
             text: replyText,
             type: "verdict",
             verdict: verdict,
-            verdictLabel: verdictLabel
+            verdictLabel: verdictLabel,
+            questionId: action.answer.questionId
           });
           setBubbleState("host", charactersData.host.name, replyText, verdict);
           GameState.request = null;
@@ -2532,6 +2572,7 @@
         }
 
         case GameAction.HOST_FAILED:
+          if (GameState.request) clearTimeout(GameState.request.timeoutId);
           GameState.records.push({
             id: Date.now() + 2,
             speakerId: "system",
@@ -2544,7 +2585,28 @@
           GameState.phase = "awaiting-player";
           break;
 
+        case GameAction.HOST_ABORTED:
+          if (GameState.request) {
+            GameState.request.abortRequested = true;
+            clearTimeout(GameState.request.timeoutId);
+          }
+          GameState.records.push({
+            id: Date.now() + 3,
+            speakerId: "system",
+            speakerName: "系统",
+            text: "已停止主持人回应。可直接重试。",
+            type: "system",
+            verdict: null
+          });
+          GameState.request = null;
+          GameState.phase = "awaiting-player";
+          break;
+
         case GameAction.RESET_GAME:
+          if (GameState.request) {
+            GameState.request.abortRequested = true;
+            clearTimeout(GameState.request.timeoutId);
+          }
           GameState.records = INITIAL_RECORDS.map(record => ({ ...record }));
           GameState.bubbles = {};
           GameState.phase = "awaiting-player";
@@ -2584,11 +2646,21 @@
       renderSoupBar();
       renderDialogueList();
       renderBubbles();
+      renderSendButton();
     }
 
     function renderSoupBar() {
       const el = document.getElementById("soup-brief-text");
       if (el) el.textContent = GameState.soup.surface;
+    }
+
+    // 请求进行中，发送按钮兼作停止按钮（不改变视觉基线结构，仅切换文案）
+    function renderSendButton() {
+      const btn = document.getElementById("btn-send");
+      if (!btn) return;
+      const label = btn.querySelector("span");
+      if (!label) return;
+      label.textContent = GameState.request ? "停止生成" : "发言 / 破汤";
     }
 
     function renderBubbles() {
@@ -2701,13 +2773,14 @@
       },
 
       // 主持人判定：与 DirectApiAdapter / MockAdapter 同接口
-      async hostEvaluate(questionText) {
+      async hostEvaluate(questionText, opts) {
+        opts = opts || {};
         const prompts = [
           { role: "system", content: buildHostSystemPrompt() },
-          { role: "user", content: buildHostUserPrompt(questionText) }
+          { role: "user", content: buildHostUserPrompt(questionText, opts.generationId) }
         ];
-        const raw = await this.generate(prompts, { generationId: "turtle-host-" + Date.now() });
-        return parseHostAnswer(raw);
+        const raw = await this.generate(prompts, { generationId: opts.generationId });
+        return parseHostAnswerV1(raw, opts.generationId);
       }
     };
 
@@ -2868,14 +2941,25 @@
       diagnose: function () {
         return { capabilities: TavernAdapter.capabilities, available: TavernAdapter.available, mode: hostModeName() };
       },
-      serializeState: serializeState
+      serializeState: serializeState,
+      debug: {
+        hostTimeoutMs: HOST_TIMEOUT_MS // 测试钩子：可缩短超时阈值验证超时路径
+      }
     };
 
     // --- MockAdapter：无酒馆接口时的演示裁判，第 4 轮由 TavernAdapter 同接口替换 ---
     const MockAdapter = {
-      hostEvaluate(questionText) {
+      hostEvaluate(questionText, opts) {
         return new Promise(resolve => {
-          setTimeout(() => resolve(evaluateByKeywords(questionText)), 1200);
+          setTimeout(() => {
+            const result = evaluateByKeywords(questionText);
+            resolve({
+              verdict: result.verdict,
+              verdictLabel: result.verdictLabel,
+              hostReply: result.hostReply,
+              questionId: opts && opts.generationId ? opts.generationId : null
+            });
+          }, 1200);
         });
       }
     };
@@ -2911,12 +2995,13 @@
     };
 
     const DirectApiAdapter = {
-      hostEvaluate(questionText) {
-        return requestHostFromApi(questionText);
+      hostEvaluate(questionText, opts) {
+        return requestHostFromApi(questionText, opts);
       }
     };
 
-    async function requestHostFromApi(questionText) {
+    async function requestHostFromApi(questionText, opts) {
+      opts = opts || {};
       const cfg = globalApiConfig;
       const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
       const headers = { "Content-Type": "application/json" };
@@ -2925,12 +3010,13 @@
       const res = await fetch(url, {
         method: "POST",
         headers: headers,
+        signal: opts.signal,
         body: JSON.stringify({
           model: cfg.model || "gpt-4o",
           temperature: cfg.temperature,
           messages: [
             { role: "system", content: buildHostSystemPrompt() },
-            { role: "user", content: buildHostUserPrompt(questionText) }
+            { role: "user", content: buildHostUserPrompt(questionText, opts.generationId) }
           ],
           response_format: { type: "json_object" }
         })
@@ -2939,7 +3025,7 @@
       const data = await res.json();
       const content = data && data.choices && data.choices[0] && data.choices[0].message
         ? data.choices[0].message.content : "";
-      return parseHostAnswer(String(content || ""));
+      return parseHostAnswerV1(String(content || ""), opts.generationId);
     }
 
     function buildHostSystemPrompt() {
@@ -2947,13 +3033,13 @@
         "你是海龟汤游戏的主持人，掌握完整汤底，只依据汤底判定玩家的问题。",
         "<TURTLE_SECRET>汤底：" + GameState.secret.truth + "</TURTLE_SECRET>",
         "判定规则：verdict 只能是 yes（问题方向正确）、critical_yes（触及核心真相）、no（与汤底不符）、irrelevant（与解题无关）。",
-        "text 是面向玩家的一句简短中文回应，可以补充引导，但绝不要透露或暗示汤底内容本身。",
-        '只输出 JSON 对象：{"verdict":"yes|no|irrelevant|critical_yes","text":"..."}，不要输出任何其他内容。'
+        "answer 是面向玩家的一句简短中文回应，可以补充引导，但绝不要透露或暗示汤底内容本身。",
+        "只输出 host-answer-v1 协议的 JSON 对象：{\"protocol\":\"host-answer-v1\",\"question_id\":\"<本次问题ID>\",\"verdict\":\"yes|no|irrelevant|critical_yes\",\"answer\":\"...\"}，question_id 必须原样使用玩家消息中给出的问题 ID，不要输出任何其他内容。"
       ].join("\n");
     }
 
-    function buildHostUserPrompt(questionText) {
-      const lines = ["【汤面】" + GameState.soup.surface, "【公开记录】"];
+    function buildHostUserPrompt(questionText, questionId) {
+      const lines = ["【问题ID】" + (questionId || ""), "【汤面】" + GameState.soup.surface, "【公开记录】"];
       GameState.records.slice(0, -1).forEach(item => {
         if (item.type === "question" || item.type === "verdict") {
           lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
@@ -2963,7 +3049,8 @@
       return lines.join("\n");
     }
 
-    function parseHostAnswer(content) {
+    // host-answer-v1 严格校验：协议、question_id、verdict 值域、answer 非空；任何不符整条拒绝
+    function parseHostAnswerV1(content, expectedQuestionId) {
       const start = content.indexOf("{");
       const end = content.lastIndexOf("}");
       if (start < 0 || end <= start) throw new Error("响应不是 JSON");
@@ -2973,12 +3060,18 @@
       } catch (e) {
         throw new Error("响应 JSON 解析失败");
       }
+      if (parsed.protocol !== "host-answer-v1") {
+        throw new Error("响应协议不是 host-answer-v1");
+      }
+      if (!expectedQuestionId || parsed.question_id !== expectedQuestionId) {
+        throw new Error("响应 question_id 不匹配（期望 " + expectedQuestionId + "，收到 " + parsed.question_id + "）");
+      }
       const verdict = parsed.verdict;
-      const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
-      if (!VERDICT_LABELS[verdict] || !text) {
+      const answer = typeof parsed.answer === "string" ? parsed.answer.trim() : "";
+      if (!VERDICT_LABELS[verdict] || !answer) {
         throw new Error("响应字段非法（verdict: " + verdict + "）");
       }
-      return { verdict: verdict, verdictLabel: VERDICT_LABELS[verdict], hostReply: text };
+      return { verdict: verdict, verdictLabel: VERDICT_LABELS[verdict], hostReply: answer, questionId: parsed.question_id };
     }
 
     // --- AI 人设模态弹窗逻辑 (含角色专属 API 配置) ---

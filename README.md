@@ -5,12 +5,12 @@
 
 ## 现状
 
-- **可运行产物**：`TurtleSoup.html`（单 HTML）已按计划第 1+2 轮重建并经用户确认（2026-09-11）——完整恢复 `UI_design.html` 视觉基线（4:1 圆桌布局、五座位气泡、四类便签墙、三弹窗、移动端 Tab），独立浏览器中本地 Mock 问答闭环可用。
-- **LLM 直连**：第 2A 轮已实现（待真机确认）——全局 API 弹窗配置 OpenAI 兼容接口（Base URL / API Key / Model / Temperature）后，主持人为真实 LLM 判定（结构化 JSON 输出，汤底只进入主持人请求的 system 消息）；未配置或清空 Base URL 时自动回退本地 Mock 裁判；请求失败显示可重试错误。
-- **测试基线**：`integration-test/harness.html` 共 32 项断言（围栏纪律 / 启动与视觉结构 / Mock 闭环 / LLM 直连协议与隔离）全绿。
+- **可运行产物**：`TurtleSoup.html`（单 HTML）已按计划第 1+2+2A+3+4+5 轮建成并经用户确认（2026-09-11）——完整恢复 `UI_design.html` 视觉基线；Mock / 直连 API / 酒馆助手三级主持人调度；Action -> Store -> View 单向状态流；TavernAdapter 能力探测与运行环境诊断（设置弹窗）；`<Puzzle>` 角色名单输入协议（缺号/重名校验、默认名单回退）。
+- **主持人模式**：显式配置 OpenAI 兼容接口时直连优先；酒馆助手可用时走 `generateRaw`（静默后台生成）；否则本地演示裁判。汤底仅进入主持人请求的 system 消息。
+- **测试基线**：`integration-test/harness.html` 共 49 项断言全绿（围栏 / 视觉结构 / Mock 闭环 / LLM 直连 / 单向流 / TavernAdapter / Puzzle 输入七组）。
 - **视觉基线**：`UI_design.html`（2652 行）为唯一视觉标准，只读不改。
 - **废弃实现**：旧 `TurtleSoup.html` 已归档至 `备份（无需阅读）/TurtleSoup.html`，不再进入版本跟踪。
-- **下一轮目标**：第 3 轮（状态模型和 View/Action 分离），之后第 4 轮接入 TavernAdapter。
+- **下一轮目标**：第 6 轮（真实主持人问答）——`host-answer-v1` 响应协议、`question_id` 账本、超时与停止。
 
 ## 目录结构
 

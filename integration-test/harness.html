@@ -107,7 +107,7 @@
       "window.confirm = function(){ return true; };",
       "window.alert = function(){};",
       "try { localStorage.removeItem('ai_turtle_global_api'); localStorage.removeItem('ai_turtle_avatar_library'); } catch (e) {}",
-      "window.__tavernMock = { calls: { generateRaw: 0, generate: 0, getVariables: 0 }, generateRawCalls: [], generateRawResponder: null };",
+      "window.__tavernMock = { calls: { generateRaw: 0, generate: 0, getVariables: 0, stopGeneration: 0 }, generateRawCalls: [], generateRawResponder: null };",
       "window.__fetchMock = { calls: [], responder: null, trace: [] };",
       "window.__realFetch = window.fetch.bind(window);",
       "window.fetch = function(url, opts) {",
@@ -143,7 +143,7 @@
       "  return '';",
       "};",
       "window.generate = async function(opts){ window.__tavernMock.calls.generate++; return ''; };",
-      "window.stopGenerationById = async function(){ return true; };",
+      "window.stopGenerationById = async function(){ window.__tavernMock.calls.stopGeneration++; return true; };",
       "window.eventOn = function(){ return { stop: function(){} }; };",
       "window.tavern_events = { CHAT_CHANGED: 'chat_changed', MESSAGE_RECEIVED: 'message_received' };"
     ].join('\n');
@@ -363,6 +363,23 @@
       return Promise.resolve(new (win().Response)(body, { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }
     function setLlmResponder(fn) { win().__fetchMock.responder = fn; }
+    // host-answer-v1 便捷 responder：从请求参数中提取真实 question_id，保证响应可被严格校验接受
+    function v1Json(questionId, verdict, answer) {
+      return JSON.stringify({ protocol: 'host-answer-v1', question_id: questionId, verdict: verdict, answer: answer });
+    }
+    function extractQid(text) {
+      const m = /【问题ID】(q-\d+)/.exec(text);
+      return m ? m[1] : null;
+    }
+    function directV1Responder(verdict, answer) {
+      return call => {
+        const body = JSON.parse(call.opts.body);
+        return mockLlmResponse(v1Json(extractQid(body.messages[1].content), verdict, answer));
+      };
+    }
+    function tavernV1Responder(verdict, answer) {
+      return opts => Promise.resolve(v1Json(extractQid(opts.ordered_prompts[1].content), verdict, answer));
+    }
     function configureApiViaUi(baseUrl, key, model) {
       win().openGlobalApiModal();
       doc().getElementById('global-api-url').value = baseUrl;
@@ -379,7 +396,7 @@
     t2a('配置 API 后发送：直连请求且仅发出一次（URL/方法/鉴权/模型）', async () => {
       configureApiViaUi('https://mock-llm.example.com/v1', 'sk-test-12345', 'mock-model-x');
       win().__fetchMock.calls = [];
-      setLlmResponder(() => mockLlmResponse('{"verdict":"yes","text":"是的，他的经历确实与海难有关。"}'));
+      setLlmResponder(directV1Responder('yes', '是的，他的经历确实与海难有关。'));
 
       const base = recordCount();
       await sendQuestion('男子的遭遇和海难有关吗？');
@@ -418,7 +435,7 @@
       assert(!bodyStr.includes('sk-test-12345'), 'API Key 泄露进请求体');
     });
     t2a('critical_yes 判定显示【是，且至关重要】', async () => {
-      setLlmResponder(() => mockLlmResponse('{"verdict":"critical_yes","text":"你触及了当年海难中最关键的真相。"}'));
+      setLlmResponder(directV1Responder('critical_yes', '你触及了当年海难中最关键的真相。'));
       const base = recordCount();
       await sendQuestion('当年是不是有人用自己身体的一部分救了他？');
       await waitForRecords(base + 2);
@@ -436,13 +453,13 @@
       assert(last.querySelector('.item-text').textContent.includes('请求失败'), '错误记录文本不符');
 
       // 直接重试（换回 200 响应）
-      setLlmResponder(() => mockLlmResponse('{"verdict":"no","text":"否，与此无关。"}'));
+      setLlmResponder(directV1Responder('no', '否，与此无关。'));
       await sendQuestion('重试的问题：男子是厨师吗？');
       await waitForRecords(base + 4, 30000); // 错误回合 2 条 + 重试 1 问 1 答
       assert(lastRecord().classList.contains('is-verdict'), '重试后应成功产生判定记录');
     });
     t2a('清空 API 配置后回退 Mock 闭环（fetch 不再被调用）', async () => {
-      setLlmResponder(() => mockLlmResponse('{"verdict":"yes","text":"不应被调用"}'));
+      setLlmResponder(directV1Responder('yes', '不应被调用'));
       configureApiViaUi('', 'sk-test-12345', 'mock-model-x'); // 清空 Base URL
       const callsBefore = win().__fetchMock.calls.length;
 
@@ -517,8 +534,7 @@
     });
     t4('Tavern 模式主持人判定：generateRaw 恰好一次，system 含汤底、user 含问题且静默', async () => {
       await mountApp({ tavern: 'full' });
-      win().__tavernMock.generateRawResponder = () =>
-        Promise.resolve('{"verdict":"yes","text":"是的，与他的海难经历有关。"}');
+      win().__tavernMock.generateRawResponder = tavernV1Responder('yes', '是的，与他的海难经历有关。');
       const base = recordCount();
       await sendQuestion('海龟汤测试：男子的过去与大海有关吗？');
       await waitForRecords(base + 2, 30000);
@@ -534,7 +550,7 @@
     t4('调度优先级：显式配置 API 时直连优先于酒馆助手', async () => {
       await mountApp({ tavern: 'full' });
       configureApiViaUi('https://mock-llm.example.com/v1', 'sk-test-4', 'mock-model-x');
-      setLlmResponder(() => mockLlmResponse('{"verdict":"no","text":"否，与毒药无关。"}'));
+      setLlmResponder(directV1Responder('no', '否，与毒药无关。'));
       const base = recordCount();
       await sendQuestion('优先级测试：汤里有毒吗？');
       await waitForRecords(base + 2, 30000);
@@ -551,8 +567,7 @@
       assert(last.querySelector('.item-speaker').textContent.includes('系统'), '失败应产生系统错误记录');
       assert(last.querySelector('.item-text').textContent.includes('酒馆生成失败'), '错误信息未透出');
 
-      win().__tavernMock.generateRawResponder = () =>
-        Promise.resolve('{"verdict":"irrelevant","text":"与此无关。"}');
+      win().__tavernMock.generateRawResponder = tavernV1Responder('irrelevant', '与此无关。');
       await sendQuestion('重试测试：再问一次？');
       await waitForRecords(base + 4, 30000);
       assert(lastRecord().classList.contains('is-verdict'), '重试应成功产生判定记录');
@@ -605,8 +620,7 @@
       assert(doc().getElementById('soup-brief-text').textContent.trim().length > 0, '汤面栏应显示汤面');
     });
     t5('合法名单后主持人请求可见汤底，公共 DOM 无汤底', async () => {
-      win().__tavernMock.generateRawResponder = () =>
-        Promise.resolve('{"verdict":"yes","text":"是的，与海难有关。"}');
+      win().__tavernMock.generateRawResponder = tavernV1Responder('yes', '是的，与海难有关。');
       const base = recordCount();
       await sendQuestion('名单生效后：男子的过去与大海有关吗？');
       await waitForRecords(base + 2, 30000);
@@ -647,6 +661,86 @@
       assert(seatName('host') === '赫尔墨斯' && seatName('ai-1') === '艾文', '应使用默认名单');
       assert(recordCount() === 6, '默认名单应保留 demo 记录');
       assert(win().TurtleApp.diagnose().mode === '酒馆助手', '模式不受影响');
+    });
+
+    // ================= 组 6：真实主持人问答 host-answer-v1（第 6 轮验收） =================
+    const t6 = group('第 6 轮 · 真实主持人问答（host-answer-v1）');
+
+    t6('请求进行中发送按钮变停止；停止后回到可操作且可重试', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = () => new Promise(() => {}); // 永不 resolve
+      const base = recordCount();
+      await sendQuestion('停止测试：这个问题会被停止吗？');
+      await sleep(300);
+      const btn = doc().getElementById('btn-send');
+      assert(btn.querySelector('span').textContent.includes('停止'), '请求中按钮应显示停止');
+      btn.click(); // 触发停止
+      await sleep(400);
+      assert(recordCount() === base + 2, '应有玩家记录与停止记录（+' + (recordCount() - base) + '）');
+      assert(lastRecord().querySelector('.item-speaker').textContent.includes('系统'), '应有停止系统记录');
+      assert(btn.querySelector('span').textContent.includes('发言'), '停止后按钮应恢复发送');
+      assert(win().__tavernMock.calls.stopGeneration === 1, '应调用 stopGenerationById 中断酒馆生成');
+
+      win().__tavernMock.generateRawResponder = tavernV1Responder('no', '否，请再想想。');
+      await sendQuestion('重试：男子戴帽子吗？');
+      await waitForRecords(base + 4, 30000);
+      assert(lastRecord().classList.contains('is-verdict'), '停止后应可重试成功');
+    });
+    t6('v1 响应成功：判定记录与玩家问题共享同一 question_id', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = tavernV1Responder('critical_yes', '触及了核心真相。');
+      const base = recordCount();
+      await sendQuestion('账本测试：有人牺牲了自己救他吗？');
+      await waitForRecords(base + 2, 30000);
+      const state = JSON.parse(win().serializeState());
+      const qRec = state.records[state.records.length - 2];
+      const aRec = state.records[state.records.length - 1];
+      assert(qRec.type === 'question' && aRec.type === 'verdict', '记录顺序错误');
+      assert(/^q-\d+$/.test(qRec.questionId || ''), 'question_id 格式错误: ' + qRec.questionId);
+      assert(qRec.questionId === aRec.questionId, '判定与提问的 question_id 不一致');
+    });
+    t6('question_id 不匹配的响应整条拒绝，可重试', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = () => Promise.resolve(v1Json('q-999', 'yes', '伪造的 ID。'));
+      const base = recordCount();
+      await sendQuestion('ID 校验测试：这次响应带错 ID。');
+      await waitForRecords(base + 2, 30000);
+      const last = lastRecord();
+      assert(last.querySelector('.item-speaker').textContent.includes('系统'), '应产生系统错误记录');
+      assert(last.querySelector('.item-text').textContent.includes('question_id 不匹配'), '错误信息不符');
+
+      win().__tavernMock.generateRawResponder = tavernV1Responder('yes', '现在 ID 对了。');
+      await sendQuestion('重试：这次 ID 正确。');
+      await waitForRecords(base + 4, 30000);
+      assert(lastRecord().classList.contains('is-verdict'), '重试应成功');
+    });
+    t6('缺 answer 字段的响应整条拒绝', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = opts =>
+        Promise.resolve(JSON.stringify({ protocol: 'host-answer-v1', question_id: extractQid(opts.ordered_prompts[1].content), verdict: 'yes' }));
+      const base = recordCount();
+      await sendQuestion('缺字段测试：响应没有 answer。');
+      await waitForRecords(base + 2, 30000);
+      const last = lastRecord();
+      assert(last.querySelector('.item-speaker').textContent.includes('系统'), '应拒绝并产生错误记录');
+      assert(last.querySelector('.item-text').textContent.includes('响应字段非法'), '错误信息不符: ' + last.querySelector('.item-text').textContent);
+    });
+    t6('请求超时回到可操作状态，且可重试', async () => {
+      await mountApp({ tavern: 'full' });
+      win().TurtleApp.debug.hostTimeoutMs = 800; // 调试钩子缩短超时阈值
+      win().__tavernMock.generateRawResponder = () => new Promise(() => {}); // 永不 resolve
+      const base = recordCount();
+      await sendQuestion('超时测试：这个请求永不返回。');
+      await waitForRecords(base + 2, 8000);
+      const last = lastRecord();
+      assert(last.querySelector('.item-text').textContent.includes('超时'), '应有超时错误记录');
+      assert(doc().getElementById('btn-send').querySelector('span').textContent.includes('发言'), '超时后按钮应恢复');
+
+      win().TurtleApp.debug.hostTimeoutMs = 800;
+      win().__tavernMock.generateRawResponder = tavernV1Responder('irrelevant', '与此无关。');
+      await sendQuestion('重试：超时后再次提问。');
+      await waitForRecords(base + 4, 30000);
+      assert(lastRecord().classList.contains('is-verdict'), '超时后应可重试成功');
     });
 
     // ================= 运行与渲染 =================
