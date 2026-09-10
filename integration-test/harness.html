@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TurtleSoup 集成测试 harness</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Noto Sans SC', system-ui, sans-serif;
+      background: #14100d;
+      color: #fdf7f2;
+      padding: 1.2rem 1.5rem 2rem;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    h1 { font-size: 1.15rem; }
+    #run-all {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: #1a120e;
+      font-weight: 800;
+      border: none;
+      border-radius: 9px;
+      padding: 0.5rem 1.2rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    #run-all:disabled { opacity: 0.5; cursor: wait; }
+    #summary { font-size: 0.9rem; font-weight: 700; }
+    .group {
+      background: rgba(48, 35, 29, 0.55);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.9rem;
+    }
+    .group-title {
+      font-size: 0.92rem;
+      font-weight: 800;
+      color: #fbbf24;
+      margin-bottom: 0.5rem;
+    }
+    .assert-row {
+      font-size: 0.84rem;
+      padding: 0.22rem 0;
+      display: flex;
+      gap: 0.55rem;
+      align-items: baseline;
+    }
+    .assert-state { font-weight: 800; width: 1.2rem; flex-shrink: 0; }
+    .assert-state.pending { color: #9e8c80; }
+    .assert-state.pass { color: #34d399; }
+    .assert-state.fail { color: #fb7185; }
+    .assert-desc { flex: 1; }
+    .assert-err { color: #fb7185; font-size: 0.76rem; word-break: break-all; }
+    #frame-wrap {
+      margin-top: 1rem;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    #app-frame { width: 100%; height: 640px; border: none; display: block; background: #18120f; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TurtleSoup.html 集成测试 harness</h1>
+    <button id="run-all">运行全部断言</button>
+    <span id="summary">尚未运行</span>
+  </header>
+  <div id="groups"></div>
+  <div id="frame-wrap">
+    <iframe id="app-frame" title="被测产物"></iframe>
+  </div>
+
+  <script>
+    // ================= 断言框架 =================
+    const groups = [];
+    function group(title) {
+      const g = { title, assertions: [] };
+      groups.push(g);
+      return (desc, fn) => g.assertions.push({ desc, fn });
+    }
+    function assert(cond, msg) {
+      if (!cond) throw new Error(msg || '断言失败');
+    }
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    // ================= 注入产物的 mock 酒馆桥（第 4 轮 TavernAdapter 将消费这些接口） =================
+    const MOCK_BRIDGE = [
+      "window.__appErrors = [];",
+      "window.addEventListener('error', function(e){ window.__appErrors.push(String(e.message)); });",
+      "window.confirm = function(){ return true; };",
+      "window.alert = function(){};",
+      "window.__tavernMock = { calls: { generateRaw: 0, generate: 0, getVariables: 0 } };",
+      "window.getVariables = function(){ window.__tavernMock.calls.getVariables++; return {}; };",
+      "window.replaceVariables = function(){ return true; };",
+      "window.insertOrAssignVariables = function(){ return true; };",
+      "window.getCurrentMessageId = function(){ return 0; };",
+      "window.getChatMessages = function(){ return []; };",
+      "window.generateRaw = async function(){ window.__tavernMock.calls.generateRaw++; return ''; };",
+      "window.generate = async function(){ window.__tavernMock.calls.generate++; return ''; };",
+      "window.eventOn = function(){ return function(){}; };",
+      "window.tavern_events = {};"
+    ].join('\n');
+
+    let productHtml = '';
+
+    async function fetchText(url) {
+      const res = await fetch(url);
+      assert(res.ok, '请求失败: ' + url + ' (HTTP ' + res.status + ')');
+      return res.text();
+    }
+
+    async function mountApp() {
+      productHtml = await fetchText('../TurtleSoup.html');
+      // 注意：'<' + '/script>' 拆写，避免 HTML 解析器把这里的字符串字面量当成 harness 自身 script 块的闭合标签
+      const injected = productHtml.replace(
+        '<head>',
+        '<head>\n<scr' + 'ipt>' + MOCK_BRIDGE + '</scr' + 'ipt>'
+      );
+      const frame = document.getElementById('app-frame');
+      await new Promise(resolve => {
+        frame.onload = resolve;
+        frame.srcdoc = injected;
+      });
+      await sleep(400); // 等待 DOMContentLoaded 与初始渲染完成
+    }
+
+    function frame() { return document.getElementById('app-frame'); }
+    function doc() { return frame().contentDocument; }
+    function win() { return frame().contentWindow; }
+    function recordCount() { return doc().querySelectorAll('#dialogue-list .dialogue-item').length; }
+    function lastRecord() {
+      const items = doc().querySelectorAll('#dialogue-list .dialogue-item');
+      return items[items.length - 1] || null;
+    }
+
+    // ================= 组 0：测试基线与围栏纪律 =================
+    const t0 = group('第 0 轮 · 测试基线与围栏纪律');
+    t0('产物 TurtleSoup.html 可读取且非空', async () => {
+      assert(productHtml.length > 10000, '产物为空或过小');
+    });
+    t0('产物源码不含三连及以上反引号（楼层围栏纪律，防同楼层引号污染）', async () => {
+      const fences = productHtml.match(/`{3,}/g) || [];
+      assert(fences.length === 0, '发现 ' + fences.length + ' 处围栏序列');
+    });
+    t0('夹具 fixtures/puzzle.yaml 可独立读取且含 主持人/玩家1~3', async () => {
+      const yaml = await fetchText('./fixtures/puzzle.yaml');
+      assert(yaml.includes('游戏数据栏'), '缺少 游戏数据栏 顶层对象');
+      assert(yaml.includes('主持人'), '缺少 主持人 字段');
+      for (let i = 1; i <= 3; i++) assert(yaml.includes('玩家' + i), '缺少 玩家' + i + ' 字段');
+    });
+    t0('夹具 fixtures/mock-data.json 可解析：汤面/三判定/伙伴发言字段齐全', async () => {
+      const data = JSON.parse(await fetchText('./fixtures/mock-data.json'));
+      assert(data.soup && typeof data.soup.surface === 'string' && data.soup.surface.length > 0, 'soup.surface 缺失');
+      assert(Array.isArray(data.hostAnswers) && data.hostAnswers.length === 3, 'hostAnswers 应有 3 条');
+      const verdicts = data.hostAnswers.map(a => a.verdict).sort().join(',');
+      assert(verdicts === 'irrelevant,no,yes', 'hostAnswers 判定值域不符: ' + verdicts);
+      assert(data.peerSpeech.length >= 1 && data.peerSpeech[0].actorId && data.peerSpeech[0].text, 'peerSpeech 缺失');
+    });
+
+    // ================= 组 1：启动与视觉结构（第 1 轮验收） =================
+    const t1 = group('第 1 轮 · 启动与视觉结构');
+    t1('页面启动无白屏（容器与初始记录存在）', async () => {
+      assert(doc().querySelector('.app-container'), '缺少 .app-container');
+      assert(recordCount() >= 6, '初始记录不足 6 条');
+    });
+    t1('顶部栏完整：汤面摘要非空、API/设置/全屏按钮存在', async () => {
+      const brief = doc().getElementById('soup-brief-text');
+      assert(brief && brief.textContent.trim().length > 0, '汤面摘要缺失或为空');
+      const btns = doc().querySelectorAll('.top-actions .top-action-btn');
+      assert(btns.length === 3, '顶部操作按钮应为 3 个，实际 ' + btns.length);
+    });
+    t1('圆桌舞台与 SVG 场景存在', async () => {
+      assert(doc().getElementById('table-arena'), '缺少 #table-arena');
+      assert(doc().querySelector('.svg-scene-background'), '缺少 SVG 场景层');
+    });
+    t1('便签墙四类便签齐全（confirmed/clue/question/excluded）', async () => {
+      assert(doc().getElementById('sticky-notes-cluster'), '缺少 #sticky-notes-cluster');
+      ['confirmed', 'clue', 'question', 'excluded'].forEach(type => {
+        assert(doc().querySelector('[data-note-type="' + type + '"]'), '缺少便签类型 ' + type);
+      });
+    });
+    t1('五个座位齐全（主持人/三伙伴/玩家）', async () => {
+      ['seat-host', 'seat-ai-1', 'seat-ai-2', 'seat-ai-3', 'seat-player'].forEach(id => {
+        assert(doc().getElementById(id), '缺少座位 #' + id);
+      });
+    });
+    t1('五个气泡齐全', async () => {
+      ['bubble-host', 'bubble-ai-1', 'bubble-ai-2', 'bubble-ai-3', 'bubble-player'].forEach(id => {
+        assert(doc().getElementById(id), '缺少气泡 #' + id);
+      });
+    });
+    t1('记录区完整：列表 + 计数 6 条 + 三个筛选 Tab', async () => {
+      assert(doc().getElementById('dialogue-list'), '缺少 #dialogue-list');
+      assert(doc().getElementById('record-counter').textContent.includes('6'), '计数器应显示 6 条');
+      assert(doc().querySelectorAll('.filter-tab').length === 3, '筛选 Tab 应为 3 个');
+    });
+    t1('输入栏存在（输入框 + 发送按钮）', async () => {
+      assert(doc().getElementById('player-input'), '缺少 #player-input');
+      assert(doc().getElementById('btn-send'), '缺少 #btn-send');
+    });
+    t1('控制台无未处理错误', async () => {
+      assert(win().__appErrors.length === 0, '捕获到错误: ' + win().__appErrors.join(' | '));
+    });
+    t1('无水平溢出', async () => {
+      const d = doc().documentElement;
+      assert(d.scrollWidth <= d.clientWidth + 1, '水平溢出: scrollWidth=' + d.scrollWidth + ' clientWidth=' + d.clientWidth);
+    });
+    t1('三个弹窗可打开并可关闭', async () => {
+      const pairs = [
+        ['openGlobalApiModal', 'closeGlobalApiModal', 'global-api-modal-overlay'],
+        ['openSettingsModal', 'closeSettingsModal', 'settings-modal-overlay'],
+        ['openPersonaModal', 'closePersonaModal', 'persona-modal-overlay']
+      ];
+      pairs.forEach(([open, close, overlayId]) => {
+        win()[open]('host');
+        assert(doc().getElementById(overlayId).classList.contains('active'), overlayId + ' 未打开');
+        win()[close]();
+        assert(!doc().getElementById(overlayId).classList.contains('active'), overlayId + ' 未关闭');
+      });
+    });
+    t1('移动端 Tab 切换生效（data-mobile-view 属性）', async () => {
+      win().switchMobileView('dialogue');
+      assert(doc().getElementById('main-layout').dataset.mobileView === 'dialogue', '未切换到 dialogue');
+      win().switchMobileView('stage');
+      assert(doc().getElementById('main-layout').dataset.mobileView === 'stage', '未切回 stage');
+    });
+
+    // ================= 组 2：本地 Mock 问答闭环（第 2 轮验收） =================
+    const t2 = group('第 2 轮 · 本地 Mock 问答闭环');
+    let initialHostBubbleText = '';
+
+    t2('发送后玩家气泡立即更新', async () => {
+      initialHostBubbleText = doc().querySelector('#bubble-host .bubble-content').textContent;
+      const base = recordCount();
+      const input = doc().getElementById('player-input');
+      input.value = '男子在船上经历过海难吗？';
+      doc().getElementById('btn-send').click();
+      assert(doc().querySelector('#bubble-player .bubble-content').textContent.includes('海难'), '玩家气泡未更新');
+      assert(recordCount() === base + 1, '记录应 +1');
+    });
+    t2('发送后最新记录为玩家提问', async () => {
+      const last = lastRecord();
+      assert(last.classList.contains('is-player'), '最新记录应为玩家样式');
+      assert(last.querySelector('.item-text').textContent.includes('海难'), '最新记录文本不符');
+    });
+    t2('Mock 延迟后主持人回答出现且判定合法', async () => {
+      const before = recordCount();
+      await sleep(1700);
+      assert(recordCount() === before + 1, '主持人回答未出现（记录未 +1）');
+      const last = lastRecord();
+      assert(last.classList.contains('is-verdict'), '主持人记录应为判定样式');
+      const tag = last.querySelector('.item-verdict-tag');
+      assert(tag && /【(是|否|与此无关)/.test(tag.textContent), '判定标签非法: ' + (tag ? tag.textContent : '无'));
+    });
+    t2('主持人气泡更新（非初始文本）', async () => {
+      const text = doc().querySelector('#bubble-host .bubble-content').textContent;
+      assert(text !== initialHostBubbleText, '主持人气泡仍是初始文本');
+    });
+    t2('空输入不新增记录', async () => {
+      const base = recordCount();
+      doc().getElementById('player-input').value = '   ';
+      doc().getElementById('btn-send').click();
+      await sleep(100);
+      assert(recordCount() === base, '空输入不应新增记录');
+    });
+    t2('Enter 键发送生效', async () => {
+      const base = recordCount();
+      const input = doc().getElementById('player-input');
+      input.value = '餐厅的汤里有毒吗？';
+      input.dispatchEvent(new (win().KeyboardEvent)('keydown', { key: 'Enter', bubbles: true }));
+      assert(recordCount() === base + 1, 'Enter 发送未生效');
+      await sleep(1700); // 等本轮回合完成，避免影响后续断言
+      assert(recordCount() === base + 2, 'Enter 回合的主持人回答未出现');
+    });
+    t2('请求进行中重复发送不产生两次回答', async () => {
+      const base = recordCount();
+      const input = doc().getElementById('player-input');
+      input.value = '男子认识餐厅老板吗？';
+      doc().getElementById('btn-send').click();          // 第一次发送（请求进行中）
+      await sleep(200);
+      input.value = '天气和这件事有关吗？';
+      doc().getElementById('btn-send').click();          // 请求进行中的第二次发送，应被拒绝
+      await sleep(1700);
+      assert(recordCount() === base + 2, '应只产生 1 问 1 答（+' + (recordCount() - base) + '）');
+    });
+    t2('重置后恢复初始 demo 状态', async () => {
+      win().clearDialogueHistory(); // confirm 已被 mock 桥放行
+      assert(recordCount() === 6, '重置后记录应回到 6 条，实际 ' + recordCount());
+      assert(doc().getElementById('record-counter').textContent.includes('6'), '计数器未回到 6 条');
+      assert(doc().querySelector('#bubble-host .bubble-content').textContent === initialHostBubbleText, '主持人气泡未恢复初始文本');
+      assert(doc().querySelector('#bubble-player .bubble-content').textContent === '他在餐厅喝到真正的海龟汤时，意识到当年救命的“海龟汤”其实是同伴的肉！', '玩家气泡未恢复初始文本');
+    });
+
+    // ================= 运行与渲染 =================
+    function renderSkeleton() {
+      const container = document.getElementById('groups');
+      container.innerHTML = '';
+      groups.forEach(g => {
+        const gEl = document.createElement('div');
+        gEl.className = 'group';
+        const title = document.createElement('div');
+        title.className = 'group-title';
+        title.textContent = g.title;
+        gEl.appendChild(title);
+        g.assertions.forEach(a => {
+          const row = document.createElement('div');
+          row.className = 'assert-row';
+          const state = document.createElement('span');
+          state.className = 'assert-state pending';
+          state.textContent = '·';
+          const desc = document.createElement('span');
+          desc.className = 'assert-desc';
+          desc.textContent = a.desc;
+          row.appendChild(state);
+          row.appendChild(desc);
+          gEl.appendChild(row);
+          a.rowEl = row;
+          a.stateEl = state;
+        });
+        container.appendChild(gEl);
+      });
+    }
+
+    async function runAll() {
+      const btn = document.getElementById('run-all');
+      btn.disabled = true;
+      btn.textContent = '运行中…';
+      renderSkeleton();
+      document.getElementById('app-frame').srcdoc = ''; // 清空上次挂载
+      let pass = 0, fail = 0;
+      const failures = [];
+
+      // 组 0：先取产物与夹具
+      productHtml = '';
+      try {
+        productHtml = await fetchText('../TurtleSoup.html');
+      } catch (e) { productHtml = ''; }
+
+      for (const g of groups) {
+        // 组 1、2 需要挂载产物（组 0 已自行 fetch）
+        if (g === groups[1]) {
+          try { await mountApp(); } catch (e) { /* 挂载失败由组 1 断言暴露 */ }
+        }
+        for (const a of g.assertions) {
+          try {
+            await a.fn();
+            a.stateEl.className = 'assert-state pass';
+            a.stateEl.textContent = '✓';
+            pass++;
+          } catch (e) {
+            a.stateEl.className = 'assert-state fail';
+            a.stateEl.textContent = '✗';
+            const err = document.createElement('span');
+            err.className = 'assert-err';
+            err.textContent = e.message;
+            a.rowEl.appendChild(err);
+            fail++;
+            failures.push(g.title + ' / ' + a.desc);
+          }
+        }
+      }
+
+      const summary = document.getElementById('summary');
+      const total = pass + fail;
+      if (fail === 0) {
+        summary.textContent = total + ' 项全部通过 ✓';
+        summary.style.color = '#34d399';
+      } else {
+        summary.textContent = pass + ' / ' + total + ' 项通过，' + fail + ' 项失败：\n' + failures.join('\n');
+        summary.style.color = '#fb7185';
+      }
+      btn.disabled = false;
+      btn.textContent = '运行全部断言';
+    }
+
+    document.getElementById('run-all').addEventListener('click', runAll);
+    renderSkeleton();
+  </script>
+</body>
+</html>

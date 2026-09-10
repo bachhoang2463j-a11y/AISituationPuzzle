@@ -1,0 +1,22 @@
+{
+  "soup": {
+    "title": "海龟汤",
+    "surface": "男子走进一家餐厅点了一碗海龟汤，尝了一口后，冲出餐厅自杀了。为什么？",
+    "rules": ["问题应尽量能由是/否/无关回答"],
+    "answerLabels": ["yes", "no", "irrelevant", "critical_yes"]
+  },
+  "hostOnlySecret": {
+    "truth": "男子曾遭遇海难，同伴割下自己的肉谎称是海龟肉救了他；他在餐厅尝到真正的海龟汤后明白真相，愧疚崩溃自杀。",
+    "facts": ["海难中同伴牺牲自己", "荒岛上的'海龟肉'其实是人肉", "餐厅的汤是真正的海龟汤"]
+  },
+  "hostAnswers": [
+    { "actorId": "host", "verdict": "yes", "verdictLabel": "【是】", "text": "是的。你的推论切中了海难背后的故事。" },
+    { "actorId": "host", "verdict": "no", "verdictLabel": "【否】", "text": "否。完全与毒药或餐厅无关。" },
+    { "actorId": "host", "verdict": "irrelevant", "verdictLabel": "【与此无关】", "text": "与此无关，请将焦点放回海难与那碗汤的本质。" }
+  ],
+  "peerSpeech": [
+    { "actorId": "ai-1", "name": "艾文", "text": "他在海难中是不是失去了视力或者失去了味觉？", "type": "peer_discussion" },
+    { "actorId": "ai-2", "name": "索菲亚", "text": "海难同伴为了让他活下去，是不是牺牲了自己做成了食物？", "type": "peer_discussion" },
+    { "actorId": "ai-3", "name": "诺亚", "text": "这家餐厅里的海龟汤是正规且名副其实的吗？", "type": "peer_discussion" }
+  ]
+}
