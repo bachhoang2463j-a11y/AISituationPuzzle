@@ -72,3 +72,11 @@
 - 验收结果：IAB 中 harness 43/43 断言全绿（上轮 37 项零回归；新增：完整接口探测全可用、generateRaw 恰好一次且 system 含汤底/user 含问题/静默生成、直连优先于酒馆、generateRaw 失败可重试、仅变量接口时回退 Mock 不白屏、设置弹窗诊断文本）。真酒馆环境待用户导入确认。
 - HASH：`cde0deb`
 
+## 2026-09-11：完成第 5 轮——Puzzle 输入与角色名单
+
+- 变更行为：`TurtleSoup.html` 实现 `<Puzzle>` 输入协议（SPEC 8.1）完整加载链：启动时经 `TavernAdapter.getChatMessages` 从最新消息往回提取 `<Puzzle>` 区块（单消息多块、多消息多块均拒绝）→ YAML 解析（优先酒馆助手 `window.YAML`，无则用仅支持 `游戏数据栏` 两级结构的受限行式解析器）→ `validateCast` 校验（主持人非空、`玩家N` 从 1 连续、空名/重名/未知字段报错、超过 3 名伙伴截断并警告）→ 合法名单经 `dispatch(APPLY_CAST)` 应用（座位名与 `charactersData` 同步更新、新局清空记录与回合），非法或缺失时回退内置默认名单并在设置弹窗诊断区显示可操作错误；`render()` 增加 `renderSoupBar`（汤面栏从 `GameState.soup` 渲染）。汤面汤底本轮使用固定题目路径，Tavern 生成留待第 6 轮。harness：`mountApp` 支持 `chatMessages` 预设（走真实启动链路），夹具角色名改为 埃利奥特/玛德琳/弗兰克/朵拉（与默认名单区分保证断言分辨力），新增第 5 轮断言组 6 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`、`integration-test/fixtures/puzzle.yaml`。
+- 决策原因：汤面汤底选择固定题目路径（计划允许"固定题目响应或 Tavern 生成"二选一），避免本轮同时引入谜题生成协议与角色名单两个风险面；开发中发现并修复 `validateCast` 初版的真缺陷——while 循环遇缺号即停导致玩家 1+3 漏检编号断裂，改为先收集 `玩家N` 键、排序后校验连续性，并补上 SPEC 8.1 要求的未知字段检查。
+- 验收结果：IAB 中 harness 49/49 断言全绿（上轮 43 项零回归；新增：夹具合法名单应用且记录清空、名单生效后主持人请求可见汤底而公共 DOM 无汤底、缺号/重名回退默认名单并诊断报错、超 3 名截断并警告、无 `<Puzzle>` 默认名单不白屏）。真酒馆楼层带 `<Puzzle>` 消息的场景待用户真机确认。
+- HASH：`9c34935`
+
