@@ -185,6 +185,10 @@
         frame.srcdoc = injected;
       });
       await sleep(400); // 等待 DOMContentLoaded、初始渲染与启动 <Puzzle> 加载完成
+      // 默认注入确定性抽样：仅 ai-1 抽中，保持既有断言的"伙伴+主持人 2 请求、完整回合 4 条记录"预期
+      if (frame.contentWindow.TurtleApp && frame.contentWindow.TurtleApp.debug) {
+        frame.contentWindow.TurtleApp.debug.peerRandom = fixedPeerSample([true, false, false]);
+      }
     }
 
     function frame() { return document.getElementById('app-frame'); }
@@ -365,6 +369,19 @@
       return Promise.resolve(new (win().Response)(body, { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }
     function setLlmResponder(fn) { win().__fetchMock.responder = fn; }
+    // 确定性抽样源：pattern 循环给出每个伙伴的抽中与否（true -> 0.1 必中，false -> 0.9 必不中）
+    function fixedPeerSample(pattern) {
+      let i = 0;
+      return () => {
+        const v = pattern[i % pattern.length];
+        i++;
+        return v ? 0.1 : 0.9;
+      };
+    }
+    function extractPeerActorId(sysPrompt) {
+      const m = /"actor_id":"(ai-\d+)"/.exec(sysPrompt);
+      return m ? m[1] : 'ai-1';
+    }
     // host-answer-v2 / peer-speech-v1 智能 responder：按请求的 system 提示词区分 peer 与 host，账本 ID 从 user 提示词动态提取
     function extractLedger(promptText) {
       const out = [];
@@ -373,8 +390,8 @@
       while ((m = re.exec(promptText))) out.push({ id: m[1], actor: m[2], text: m[3] });
       return out;
     }
-    function peerSpeechJson(text) {
-      return JSON.stringify({ protocol: 'peer-speech-v1', actor_id: 'ai-1', text: text });
+    function peerSpeechJson(text, sysPrompt) {
+      return JSON.stringify({ protocol: 'peer-speech-v1', actor_id: extractPeerActorId(sysPrompt || ''), text: text });
     }
     function v2AnswerJson(ledger, verdict, answer) {
       return JSON.stringify({
@@ -387,14 +404,14 @@
       return call => {
         const body = JSON.parse(call.opts.body);
         const sys = body.messages[0].content;
-        if (sys.includes('peer-speech-v1')) return mockLlmResponse(peerSpeechJson(peerText));
+        if (sys.includes('peer-speech-v1')) return mockLlmResponse(peerSpeechJson(peerText, sys));
         return mockLlmResponse(v2AnswerJson(extractLedger(body.messages[1].content), verdict, answer));
       };
     }
     function smartTavernResponder(peerText, verdict, answer) {
       return opts => {
         const sys = opts.ordered_prompts[0].content;
-        if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson(peerText));
+        if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson(peerText, sys));
         return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), verdict, answer));
       };
     }
@@ -815,7 +832,7 @@
       const state = JSON.parse(win().serializeState());
       const tail = state.records.slice(-3);
       assert(tail[0].type === 'question' && tail[1].type === 'system' && tail[2].type === 'verdict', '失败回合记录顺序错误');
-      assert(tail[1].text.includes('伙伴发言失败'), '伙伴失败记录文本不符');
+      assert(tail[1].text.includes('发言失败'), '伙伴失败记录文本不符');
       assert(tail[2].questionId === tail[0].questionId, '主持人应只回答玩家问题');
     });
     t7('停止后回到等待玩家，不会自动开启下一轮', async () => {
@@ -830,6 +847,90 @@
       const state = JSON.parse(win().serializeState());
       assert(state.phase === 'awaiting-player', '停止后应回到等待玩家，实际 ' + state.phase);
       assert(state.request === null, '停止后请求应清空');
+    });
+
+    // ================= 组 8：三个伙伴与真实模式（第 8 轮验收） =================
+    const t8 = group('第 8 轮 · 三个伙伴与真实模式（逐角色请求）');
+
+    t8('三伙伴全抽中：按队列顺序各请求一次，账本与判定一一对应', async () => {
+      await mountApp({ tavern: 'full' });
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([true, true, true]);
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：补充线索。', 'yes', '方向正确。');
+      const base = recordCount();
+      await sendQuestion('全抽中测试：男子的过去与海有关吗？');
+      await waitForRecords(base + 8, 30000); // 玩家 + 3 伙伴发言 + 4 判定
+      const calls = win().__tavernMock.generateRawCalls;
+      assert(calls.length === 4, '应为 3 伙伴 + 1 主持人共 4 次请求，实际 ' + calls.length);
+      assert(calls[0].generation_id.indexOf('-peer-ai-1') >= 0, '第 1 次请求应为 ai-1');
+      assert(calls[1].generation_id.indexOf('-peer-ai-2') >= 0, '第 2 次请求应为 ai-2（队列顺序）');
+      assert(calls[2].generation_id.indexOf('-peer-ai-3') >= 0, '第 3 次请求应为 ai-3（队列顺序）');
+      assert(calls[3].generation_id.indexOf('-host') >= 0, '第 4 次请求应为主持人');
+      const state = JSON.parse(win().serializeState());
+      const tail = state.records.slice(-8);
+      assert(tail.filter(r => r.type === 'peer_discussion').length === 3, '应有 3 条伙伴发言，各伙伴最多一条');
+      assert(tail.filter(r => r.type === 'verdict').length === 4, '应回答账本全部 4 个问题');
+      assert(tail.filter(r => r.type === 'question').length === 1, '玩家提问应恰一条');
+    });
+    t8('安静回合（全部未抽中）：跳过伙伴直接请主持人', async () => {
+      await mountApp({ tavern: 'full' });
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([false, false, false]);
+      win().__tavernMock.generateRawResponder = smartTavernResponder('不应被调用', 'no', '否。');
+      const base = recordCount();
+      await sendQuestion('安静回合测试：汤里下了毒吗？');
+      await waitForRecords(base + 2, 30000); // 仅玩家问题 + 1 判定
+      assert(win().__tavernMock.calls.generateRaw === 1, '安静回合应只有主持人 1 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+      const state = JSON.parse(win().serializeState());
+      assert(state.records[state.records.length - 1].type === 'verdict', '应有玩家判定');
+    });
+    t8('部分伙伴失败不丢失成功结果：失败者跳过，主持人仍回答其余问题', async () => {
+      await mountApp({ tavern: 'full' });
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([true, true, true]);
+      win().__tavernMock.generateRawResponder = opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('peer-speech-v1')) {
+          const actorId = extractPeerActorId(sys);
+          if (actorId === 'ai-2') return Promise.reject(new Error('ai-2 网络故障'));
+          return Promise.resolve(peerSpeechJson('我想问：来自 ' + actorId + ' 的问题。', sys));
+        }
+        return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), 'yes', '回答。'));
+      };
+      const base = recordCount();
+      await sendQuestion('部分失败测试：男子去过海岛吗？');
+      await waitForRecords(base + 7, 30000); // 玩家 + 2 成功发言 + 1 失败记录 + 3 判定
+      const state = JSON.parse(win().serializeState());
+      const tail = state.records.slice(-7);
+      const speeches = tail.filter(r => r.type === 'peer_discussion');
+      assert(speeches.length === 2 && speeches.every(r => r.speakerId !== 'ai-2'), 'ai-2 失败不应有发言，其余成功保留');
+      assert(tail.some(r => r.type === 'system' && r.text.includes('发言失败')), '应有失败提示记录');
+      assert(tail.filter(r => r.type === 'verdict').length === 3, '主持人应回答玩家与 2 名成功伙伴的问题');
+    });
+    t8('<Puzzle> 一名伙伴：多余座位隐藏，仅 ai-1 参与抽样', async () => {
+      await mountApp({ tavern: 'full', chatMessages: puzzleMessage('游戏数据栏:\n  主持人: "独酌"\n  玩家1: "孤灯"') });
+      assert(doc().getElementById('seat-ai-1').style.display !== 'none', 'ai-1 座位应显示');
+      assert(doc().getElementById('seat-ai-2').style.display === 'none', 'ai-2 座位应隐藏');
+      assert(doc().getElementById('seat-ai-3').style.display === 'none', 'ai-3 座位应隐藏');
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([true, true, true]); // 即使全"抽中"，也只有 ai-1 存在
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：只有我。', 'yes', '回答。');
+      const base = recordCount();
+      await sendQuestion('单人局测试：汤是热的吗？');
+      await waitForRecords(base + 4, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 2, '应只有 ai-1 伙伴与主持人共 2 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+    });
+    t8('<Puzzle> 零伙伴（仅主持人）：AI 座位全部隐藏，直接进入主持人阶段', async () => {
+      await mountApp({ tavern: 'full', chatMessages: puzzleMessage('游戏数据栏:\n  主持人: "独行侠"') });
+      assert(doc().getElementById('seat-ai-1').style.display === 'none', 'ai-1 座位应隐藏');
+      assert(doc().getElementById('seat-ai-2').style.display === 'none', 'ai-2 座位应隐藏');
+      assert(doc().getElementById('seat-ai-3').style.display === 'none', 'ai-3 座位应隐藏');
+      assert(seatName('host') === '独行侠', '主持人名单应应用: ' + seatName('host'));
+      win().__tavernMock.generateRawResponder = smartTavernResponder('不应被调用', 'no', '否。');
+      const base = recordCount();
+      await sendQuestion('零伙伴局测试：可以开始了吗？');
+      await waitForRecords(base + 2, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 1, '零伙伴局应只有主持人 1 次请求');
+      // 重置后回到默认三名伙伴，座位恢复
+      win().clearDialogueHistory();
+      assert(doc().getElementById('seat-ai-1').style.display !== 'none', '重置后 ai 座位应恢复显示');
+      assert(seatName('host') === '赫尔墨斯', '重置后应回到默认名单');
     });
 
     // ================= 运行与渲染 =================

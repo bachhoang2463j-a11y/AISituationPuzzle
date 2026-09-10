@@ -2195,9 +2195,33 @@
       records: INITIAL_RECORDS.map(record => ({ ...record })),
       bubbles: {},                    // charId -> 最近气泡内容
       initialBubbles: {},             // 启动时从 DOM 快照，重置时恢复
-      request: null,                  // 进行中请求 { id, type, startedAt, abortRequested }，非空时拒绝新请求
-      puzzleInput: null               // 启动时的谜题输入结果 { source, cast, error, warning }
+      request: null,                  // 进行中请求 { id, type, startedAt, abortRequested, timeoutId, abortController, questionIds, speakerQueue }，非空时拒绝新请求
+      puzzleInput: null,              // 启动时的谜题输入结果 { source, cast, error, warning }
+      cast: null                      // 本局名单 { host, peers[] }；null 表示内置默认名单（三名伙伴）
     };
+
+    // 内置默认名单（demo 角色名），无 <Puzzle> 或重置时使用
+    const DEFAULT_CAST_NAMES = { host: "赫尔墨斯", "ai-1": "艾文", "ai-2": "索菲亚", "ai-3": "诺亚" };
+
+    // 本局参与的伙伴座位 ID 列表（默认三名；<Puzzle> 名单可少于三名，多余座位隐藏）
+    function activePeerIds() {
+      if (GameState.cast && Array.isArray(GameState.cast.peers)) {
+        return GameState.cast.peers.map((name, i) => "ai-" + (i + 1));
+      }
+      return ["ai-1", "ai-2", "ai-3"];
+    }
+
+    // 按本局名单同步座位显示与姓名（多余的 AI 座位隐藏）
+    function applyCastToSeats() {
+      const peerIds = activePeerIds();
+      ["host", "ai-1", "ai-2", "ai-3"].forEach(charId => {
+        const seat = document.getElementById("seat-" + charId);
+        if (!seat || !charactersData[charId]) return;
+        const nameEl = seat.querySelector(".char-name");
+        if (nameEl) nameEl.textContent = charactersData[charId].name;
+        if (charId !== "host") seat.style.display = peerIds.indexOf(charId) >= 0 ? "" : "none";
+      });
+    }
 
     let currentEditingCharId = null;
     let currentFilter = "all";
@@ -2480,20 +2504,22 @@
           }
         }, timeoutMs);
 
-        // 第 7 轮：先由一名 AI 伙伴公开发言（只看公开信息），再由主持人聚合回答本轮全部问题
-        try {
-          const speech = await adapter.peerEvaluate(PEER_ACTOR_ID, {
-            generationId: request.id + "-peer",
-            signal: controller ? controller.signal : undefined
-          });
-          if (GameState.request !== request) return; // 回合已被重置或停止
-          dispatch({ type: GameAction.PEER_ANSWERED, speech: speech });
-        } catch (err) {
-          if (GameState.request !== request) return;
-          dispatch({ type: GameAction.PEER_FAILED, error: err }); // 伙伴失败不阻塞主持人阶段
+        // 第 8 轮：按抽样队列串行请求伙伴公开发言（顺序即显示顺序），单个失败不丢失其他伙伴结果
+        for (const actorId of request.speakerQueue) {
+          try {
+            const speech = await adapter.peerEvaluate(actorId, {
+              generationId: request.id + "-peer-" + actorId,
+              signal: controller ? controller.signal : undefined
+            });
+            if (GameState.request !== request) return; // 回合已被重置或停止
+            dispatch({ type: GameAction.PEER_ANSWERED, speech: speech });
+          } catch (err) {
+            if (GameState.request !== request) return;
+            dispatch({ type: GameAction.PEER_FAILED, error: err, actorId: actorId });
+          }
         }
-
         if (GameState.request !== request) return;
+        dispatch({ type: GameAction.PEER_BATCH_DONE });
         try {
           const answers = await adapter.hostEvaluate(text, {
             generationId: request.id + "-host",
@@ -2514,7 +2540,14 @@
       });
     }
 
-    // 停止进行中的回合：本地立即回到可操作状态，并尽力中断底层生成（伙伴与主持人两个阶段各一个生成 ID）
+    // 每轮为每个启用伙伴独立抽取一次 Bernoulli(0.5)；测试可经 TurtleApp.debug.peerRandom 注入确定性随机源
+    function sampleSpeakers() {
+      const random = (window.TurtleApp.debug && typeof window.TurtleApp.debug.peerRandom === "function")
+        ? window.TurtleApp.debug.peerRandom : Math.random;
+      return activePeerIds().filter(actorId => random() < 0.5);
+    }
+
+    // 停止进行中的回合：本地立即回到可操作状态，并尽力中断底层生成（每个伙伴与主持人各一个生成 ID）
     async function stopHostRequest() {
       const request = GameState.request;
       if (!request) return;
@@ -2523,7 +2556,9 @@
       }
       const adapter = pickHostAdapter();
       if (adapter === TavernAdapter && TavernAdapter.capabilities.stop) {
-        try { await TavernAdapter.stop(request.id + "-peer"); } catch (e) {}
+        (request.speakerQueue || []).forEach(actorId => {
+          try { TavernAdapter.stop(request.id + "-peer-" + actorId); } catch (e) {}
+        });
         try { await TavernAdapter.stop(request.id + "-host"); } catch (e) {}
       }
       if (GameState.request === request) {
@@ -2533,12 +2568,12 @@
 
     // --- 第 3 轮：Action -> Store -> View 单向流程 ---
     const HOST_TIMEOUT_MS = 60000; // 主持人请求超时阈值（测试可经 TurtleApp.debug.hostTimeoutMs 缩短）
-    const PEER_ACTOR_ID = "ai-1";  // 第 7 轮：仅一名 AI 伙伴（ai-1）参与讨论
 
     const GameAction = {
       SUBMIT_QUESTION: "submit-question",
       PEER_ANSWERED: "peer-answered",
       PEER_FAILED: "peer-failed",
+      PEER_BATCH_DONE: "peer-batch-done",
       HOST_ANSWERED: "host-answered",
       HOST_FAILED: "host-failed",
       HOST_ABORTED: "host-aborted",
@@ -2566,7 +2601,8 @@
           GameState.phase = "peer-thinking";
           GameState.request = {
             id: "q-" + (++requestSeq), type: "round", startedAt: Date.now(), abortRequested: false,
-            timeoutId: null, abortController: null, questionIds: ["q-" + requestSeq]
+            timeoutId: null, abortController: null, questionIds: ["q-" + requestSeq],
+            speakerQueue: sampleSpeakers() // 第 8 轮：每轮 50% 独立抽样，回合内不可变
           };
           triggerSpeakingFx("player");
           break;
@@ -2586,7 +2622,6 @@
             questionId: peerQuestionId
           });
           setBubbleState(speech.actorId, charactersData[speech.actorId] ? charactersData[speech.actorId].name : speech.actorId, speech.text, null);
-          GameState.phase = "host-thinking";
           triggerSpeakingFx(speech.actorId);
           break;
         }
@@ -2596,11 +2631,14 @@
             id: Date.now() + 5,
             speakerId: "system",
             speakerName: "系统",
-            text: "伙伴发言失败（" + (action.error && action.error.message ? action.error.message : "未知错误") + "），本轮仅回答玩家问题。",
+            text: "伙伴 " + (charactersData[action.actorId] ? charactersData[action.actorId].name : action.actorId) + " 发言失败（" + (action.error && action.error.message ? action.error.message : "未知错误") + "），本轮跳过其发言。",
             type: "system",
             verdict: null
           });
-          GameState.phase = "host-thinking";
+          break;
+
+        case GameAction.PEER_BATCH_DONE:
+          GameState.phase = "host-thinking"; // 伙伴批次（含空批次）完成后只进主持人阶段
           break;
 
         case GameAction.HOST_ANSWERED: {
@@ -2666,22 +2704,24 @@
           GameState.bubbles = {};
           GameState.phase = "awaiting-player";
           GameState.turn = 0;
+          GameState.cast = null; // 回到内置默认名单（三名伙伴）
+          Object.keys(DEFAULT_CAST_NAMES).forEach(charId => {
+            if (charactersData[charId]) charactersData[charId].name = DEFAULT_CAST_NAMES[charId];
+          });
+          applyCastToSeats();
           GameState.request = null; // 放弃进行中的请求，其迟到响应会被 handleSend 丢弃
           break;
 
         case GameAction.APPLY_CAST: {
           // action.cast = { host, peers[] }，来自合法 <Puzzle>；座位名与角色数据同步，新局从零记录开始
           const cast = action.cast;
+          GameState.cast = { host: cast.host, peers: cast.peers.slice() };
           charactersData.host.name = cast.host;
           cast.peers.forEach((name, i) => {
             const charId = "ai-" + (i + 1);
             if (charactersData[charId]) charactersData[charId].name = name;
           });
-          ["host", "ai-1", "ai-2", "ai-3"].forEach(charId => {
-            const seat = document.getElementById("seat-" + charId);
-            const nameEl = seat && seat.querySelector(".char-name");
-            if (nameEl && charactersData[charId]) nameEl.textContent = charactersData[charId].name;
-          });
+          applyCastToSeats();
           GameState.records = [];
           GameState.bubbles = {};
           GameState.phase = "awaiting-player";
@@ -2766,6 +2806,7 @@
         schemaVersion: GameState.schemaVersion,
         phase: GameState.phase,
         turn: GameState.turn,
+        cast: GameState.cast,
         soup: GameState.soup,
         records: GameState.records,
         request: GameState.request,
@@ -2921,9 +2962,8 @@
       const knownKeys = ["主持人"].concat(playerKeys);
       const unknown = Object.keys(bar).filter(k => knownKeys.indexOf(k) < 0);
       if (unknown.length > 0) return { ok: false, error: "未知的游戏数据栏字段：" + unknown.join("、") };
-      if (playerKeys.length === 0) return { ok: false, error: "缺少 玩家1（至少一名伙伴）" };
       const nums = playerKeys.map(k => parseInt(k.slice(2), 10)).sort((a, b) => a - b);
-      if (nums[0] !== 1) return { ok: false, error: "玩家编号应从 玩家1 开始" };
+      if (nums.length > 0 && nums[0] !== 1) return { ok: false, error: "玩家编号应从 玩家1 开始" };
       for (let i = 1; i < nums.length; i++) {
         if (nums[i] !== nums[i - 1] + 1) return { ok: false, error: "玩家编号断裂：缺少 玩家" + (nums[i - 1] + 1) };
       }
@@ -3009,17 +3049,23 @@
       },
       serializeState: serializeState,
       debug: {
-        hostTimeoutMs: HOST_TIMEOUT_MS // 测试钩子：可缩短超时阈值验证超时路径
+        hostTimeoutMs: HOST_TIMEOUT_MS, // 测试钩子：可缩短超时阈值验证超时路径
+        peerRandom: null                 // 测试钩子：注入确定性随机源以控制 50% 抽样
       }
     };
 
     // --- MockAdapter：无酒馆接口时的演示裁判与伙伴，第 4 轮由 TavernAdapter 同接口替换 ---
+    const MOCK_PEER_TEXTS = {
+      "ai-1": "我想问：男子在出事之前是不是船上的船员？",
+      "ai-2": "我想问：他有没有失去过某种重要的感官？",
+      "ai-3": "我想问：这家餐厅的汤有什么特别之处吗？"
+    };
+
     const MockAdapter = {
       peerEvaluate(actorId, opts) {
         return new Promise(resolve => {
           setTimeout(() => {
-            const name = charactersData[actorId] ? charactersData[actorId].name : actorId;
-            resolve({ actorId: actorId, text: "我想问：男子在出事之前是不是船上的船员？" });
+            resolve({ actorId: actorId, text: MOCK_PEER_TEXTS[actorId] || "我想问：还有其他线索吗？" });
           }, 800);
         });
       },
