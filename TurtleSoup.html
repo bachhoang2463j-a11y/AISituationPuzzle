@@ -2049,7 +2049,7 @@
   <script>
     // --- 全局 API 配置对象与本地持久化 ---
     let globalApiConfig = {
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "",
       apiKey: "",
       model: "gpt-4o",
       temperature: 0.7
@@ -2182,6 +2182,7 @@
     const GameState = {
       phase: "awaiting-player",       // awaiting-player | host-thinking
       soup: { surface: "男子走进一家餐厅点了一碗海龟汤，尝了一口后，冲出餐厅自杀了。为什么？" },
+      secret: { truth: "男子曾遭遇海难，同伴割下自己的肉谎称是海龟肉救了他；他在餐厅尝到真正的海龟汤后明白真相，愧疚崩溃自杀。" }, // 仅进入主持人请求，永不进入公共状态与 UI
       records: INITIAL_RECORDS.map(record => ({ ...record })),
       bubbles: {},                    // charId -> 最近气泡内容
       initialBubbles: {},             // 启动时从 DOM 快照，重置时恢复
@@ -2256,7 +2257,7 @@
       const model = document.getElementById("global-api-model").value.trim();
       const temp = parseFloat(document.getElementById("global-api-temp").value) || 0.7;
 
-      globalApiConfig.baseUrl = url || "https://api.openai.com/v1";
+      globalApiConfig.baseUrl = url; // 空值表示未配置，发送时回退本地 Mock 裁判
       globalApiConfig.apiKey = key;
       globalApiConfig.model = model || "gpt-4o";
       globalApiConfig.temperature = temp;
@@ -2475,9 +2476,12 @@
 
         GameState.request = "host-evaluate";
         GameState.phase = "host-thinking";
+        const adapter = globalApiConfig.baseUrl ? DirectApiAdapter : MockAdapter;
         try {
-          const answer = await MockAdapter.hostEvaluate(text);
+          const answer = await adapter.hostEvaluate(text);
           hostRespond(answer);
+        } catch (err) {
+          reportHostError(err);
         } finally {
           GameState.request = null;
           GameState.phase = "awaiting-player";
@@ -2535,6 +2539,97 @@
       return { verdict, verdictLabel, hostReply };
     }
 
+    // --- DirectApiAdapter：纯网页直连 OpenAI 兼容接口；第 4 轮 TavernAdapter 接入后作为无酒馆环境的回退 ---
+    const VERDICT_LABELS = {
+      yes: "【是】",
+      critical_yes: "【是，且至关重要】",
+      no: "【否】",
+      irrelevant: "【与此无关】"
+    };
+
+    const DirectApiAdapter = {
+      hostEvaluate(questionText) {
+        return requestHostFromApi(questionText);
+      }
+    };
+
+    async function requestHostFromApi(questionText) {
+      const cfg = globalApiConfig;
+      const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
+      const headers = { "Content-Type": "application/json" };
+      if (cfg.apiKey) headers["Authorization"] = "Bearer " + cfg.apiKey;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify({
+          model: cfg.model || "gpt-4o",
+          temperature: cfg.temperature,
+          messages: [
+            { role: "system", content: buildHostSystemPrompt() },
+            { role: "user", content: buildHostUserPrompt(questionText) }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+      if (!res.ok) throw new Error("API 返回 HTTP " + res.status);
+      const data = await res.json();
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : "";
+      return parseHostAnswer(String(content || ""));
+    }
+
+    function buildHostSystemPrompt() {
+      return [
+        "你是海龟汤游戏的主持人，掌握完整汤底，只依据汤底判定玩家的问题。",
+        "<TURTLE_SECRET>汤底：" + GameState.secret.truth + "</TURTLE_SECRET>",
+        "判定规则：verdict 只能是 yes（问题方向正确）、critical_yes（触及核心真相）、no（与汤底不符）、irrelevant（与解题无关）。",
+        "text 是面向玩家的一句简短中文回应，可以补充引导，但绝不要透露或暗示汤底内容本身。",
+        '只输出 JSON 对象：{"verdict":"yes|no|irrelevant|critical_yes","text":"..."}，不要输出任何其他内容。'
+      ].join("\n");
+    }
+
+    function buildHostUserPrompt(questionText) {
+      const lines = ["【汤面】" + GameState.soup.surface, "【公开记录】"];
+      GameState.records.slice(0, -1).forEach(item => {
+        if (item.type === "question" || item.type === "verdict") {
+          lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
+        }
+      });
+      lines.push("【玩家提问】" + questionText);
+      return lines.join("\n");
+    }
+
+    function parseHostAnswer(content) {
+      const start = content.indexOf("{");
+      const end = content.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("响应不是 JSON");
+      let parsed;
+      try {
+        parsed = JSON.parse(content.slice(start, end + 1));
+      } catch (e) {
+        throw new Error("响应 JSON 解析失败");
+      }
+      const verdict = parsed.verdict;
+      const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+      if (!VERDICT_LABELS[verdict] || !text) {
+        throw new Error("响应字段非法（verdict: " + verdict + "）");
+      }
+      return { verdict: verdict, verdictLabel: VERDICT_LABELS[verdict], hostReply: text };
+    }
+
+    function reportHostError(err) {
+      GameState.records.push({
+        id: Date.now() + 2,
+        speakerId: "system",
+        speakerName: "系统",
+        text: "主持人请求失败：" + (err && err.message ? err.message : "未知错误") + "。可直接重试；清空 API 配置后将回退本地演示裁判。",
+        type: "system",
+        verdict: null
+      });
+      renderDialogueList();
+    }
+
     function hostRespond(answer) {
       const { verdict, verdictLabel, hostReply } = answer;
       triggerSpeakerBubble("host", charactersData.host.name, `${verdictLabel} ${hostReply}`, verdict);
@@ -2569,7 +2664,10 @@
       GameState.bubbles[charId] = { title: speakerTitle, content: content, verdict: verdictType };
 
       if (headerVerdict) {
-        if (verdictType === "yes") {
+        if (verdictType === "critical_yes") {
+          headerVerdict.className = "bubble-verdict tag-yes";
+          headerVerdict.textContent = VERDICT_LABELS.critical_yes;
+        } else if (verdictType === "yes") {
           headerVerdict.className = "bubble-verdict tag-yes";
           headerVerdict.textContent = "【是】";
         } else if (verdictType === "no") {

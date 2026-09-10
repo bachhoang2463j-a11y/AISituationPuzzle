@@ -90,6 +90,15 @@
       if (!cond) throw new Error(msg || '断言失败');
     }
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    // 轮询等待产物记录数到达目标（直连请求走 mock fetch 时无固定延迟）
+    async function waitForRecords(target, timeoutMs) {
+      const start = Date.now();
+      while (Date.now() - start < (timeoutMs || 3000)) {
+        if (recordCount() >= target) return;
+        await sleep(100);
+      }
+      throw new Error('等待记录数达到 ' + target + ' 超时，当前 ' + recordCount());
+    }
 
     // ================= 注入产物的 mock 酒馆桥（第 4 轮 TavernAdapter 将消费这些接口） =================
     const MOCK_BRIDGE = [
@@ -106,7 +115,25 @@
       "window.generateRaw = async function(){ window.__tavernMock.calls.generateRaw++; return ''; };",
       "window.generate = async function(){ window.__tavernMock.calls.generate++; return ''; };",
       "window.eventOn = function(){ return function(){}; };",
-      "window.tavern_events = {};"
+      "window.tavern_events = {};",
+      "try { localStorage.removeItem('ai_turtle_global_api'); localStorage.removeItem('ai_turtle_avatar_library'); } catch (e) {}",
+      "window.__fetchMock = { calls: [], responder: null, trace: [] };",
+      "window.__realFetch = window.fetch.bind(window);",
+      "window.fetch = function(url, opts) {",
+      "  var m = window.__fetchMock;",
+      "  var u = String(url);",
+      "  m.trace.push({ t: Date.now(), phase: 'enter', url: u });",
+      "  if (m.responder && u.indexOf('/chat/completions') >= 0) {",
+      "    var call = { url: u, opts: opts };",
+      "    m.calls.push(call);",
+      "    var p = m.responder(call, m.calls.length - 1);",
+      "    p.then(function() { m.trace.push({ t: Date.now(), phase: 'mock-resolved', url: u }); });",
+      "    m.trace.push({ t: Date.now(), phase: 'mock-hit', url: u });",
+      "    return p;",
+      "  }",
+      "  m.trace.push({ t: Date.now(), phase: 'pass-through', url: u });",
+      "  return window.__realFetch(url, opts);",
+      "};"
     ].join('\n');
 
     let productHtml = '';
@@ -253,7 +280,7 @@
     });
     t2('Mock 延迟后主持人回答出现且判定合法', async () => {
       const before = recordCount();
-      await sleep(1700);
+      await waitForRecords(before + 1, 30000); // IAB 对不聚焦页面的 timer 有节流，用轮询而非固定睡眠
       assert(recordCount() === before + 1, '主持人回答未出现（记录未 +1）');
       const last = lastRecord();
       assert(last.classList.contains('is-verdict'), '主持人记录应为判定样式');
@@ -277,7 +304,7 @@
       input.value = '餐厅的汤里有毒吗？';
       input.dispatchEvent(new (win().KeyboardEvent)('keydown', { key: 'Enter', bubbles: true }));
       assert(recordCount() === base + 1, 'Enter 发送未生效');
-      await sleep(1700); // 等本轮回合完成，避免影响后续断言
+      await waitForRecords(base + 2, 30000); // 等本轮回合完成，避免影响后续断言
       assert(recordCount() === base + 2, 'Enter 回合的主持人回答未出现');
     });
     t2('请求进行中重复发送不产生两次回答', async () => {
@@ -288,7 +315,7 @@
       await sleep(200);
       input.value = '天气和这件事有关吗？';
       doc().getElementById('btn-send').click();          // 请求进行中的第二次发送，应被拒绝
-      await sleep(1700);
+      await waitForRecords(base + 2, 30000);
       assert(recordCount() === base + 2, '应只产生 1 问 1 答（+' + (recordCount() - base) + '）');
     });
     t2('重置后恢复初始 demo 状态', async () => {
@@ -297,6 +324,105 @@
       assert(doc().getElementById('record-counter').textContent.includes('6'), '计数器未回到 6 条');
       assert(doc().querySelector('#bubble-host .bubble-content').textContent === initialHostBubbleText, '主持人气泡未恢复初始文本');
       assert(doc().querySelector('#bubble-player .bubble-content').textContent === '他在餐厅喝到真正的海龟汤时，意识到当年救命的“海龟汤”其实是同伴的肉！', '玩家气泡未恢复初始文本');
+    });
+
+    // ================= 组 2A：纯网页直连 LLM 主持人（第 2A 轮验收） =================
+    const t2a = group('第 2A 轮 · 纯网页直连 LLM 主持人');
+    const SECRET_MARK = '割下自己的肉'; // 汤底特征串（与 mock-data.json hostOnlySecret 一致）
+
+    function mockLlmResponse(content) {
+      const body = JSON.stringify({ choices: [{ message: { content: content } }] });
+      return Promise.resolve(new (win().Response)(body, { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }
+    function setLlmResponder(fn) { win().__fetchMock.responder = fn; }
+    function configureApiViaUi(baseUrl, key, model) {
+      win().openGlobalApiModal();
+      doc().getElementById('global-api-url').value = baseUrl;
+      doc().getElementById('global-api-key').value = key;
+      doc().getElementById('global-api-model').value = model;
+      win().saveGlobalApiModal();
+    }
+    async function sendQuestion(text) {
+      const input = doc().getElementById('player-input');
+      input.value = text;
+      doc().getElementById('btn-send').click();
+    }
+
+    t2a('配置 API 后发送：直连请求且仅发出一次（URL/方法/鉴权/模型）', async () => {
+      configureApiViaUi('https://mock-llm.example.com/v1', 'sk-test-12345', 'mock-model-x');
+      win().__fetchMock.calls = [];
+      setLlmResponder(() => mockLlmResponse('{"verdict":"yes","text":"是的，他的经历确实与海难有关。"}'));
+
+      const base = recordCount();
+      await sendQuestion('男子的遭遇和海难有关吗？');
+      await waitForRecords(base + 2);
+
+      assert(win().__fetchMock.calls.length === 1, '应恰好发出 1 次请求，实际 ' + win().__fetchMock.calls.length);
+      const call = win().__fetchMock.calls[0];
+      assert(call.url === 'https://mock-llm.example.com/v1/chat/completions', '请求 URL 不符: ' + call.url);
+      assert(call.opts.method === 'POST', '请求方法应为 POST');
+      assert(call.opts.headers['Authorization'] === 'Bearer sk-test-12345', '鉴权头缺失或不符');
+      const body = JSON.parse(call.opts.body);
+      assert(body.model === 'mock-model-x', '模型名不符: ' + body.model);
+      assert(body.messages[1].content.includes('男子的遭遇和海难有关吗？'), '请求体未包含玩家问题');
+    });
+    t2a('主持人请求的 system 消息包含汤底高注意区块', async () => {
+      const body = JSON.parse(win().__fetchMock.calls[0].opts.body);
+      const systemMsg = body.messages[0].content;
+      assert(body.messages[0].role === 'system', '首条消息应为 system');
+      assert(systemMsg.includes('<TURTLE_SECRET>'), 'system 消息缺少 TURTLE_SECRET 区块');
+      assert(systemMsg.includes(SECRET_MARK), 'system 消息未包含汤底（主持人应可见）');
+    });
+    t2a('判定与回应写入记录和主持人气泡', async () => {
+      const last = lastRecord();
+      assert(last.classList.contains('is-verdict'), '最新记录应为判定样式');
+      assert(last.querySelector('.item-verdict-tag').textContent.includes('是'), '判定标签缺失');
+      assert(last.querySelector('.item-text').textContent.includes('海难'), '主持人回应文本未写入');
+      assert(doc().querySelector('#bubble-host .bubble-content').textContent.includes('海难'), '主持人气泡未更新');
+    });
+    t2a('汤底不出现在公共 DOM（记录与气泡）', async () => {
+      const publicText = [...doc().querySelectorAll('.item-text, .bubble-content')]
+        .map(el => el.textContent).join('\n');
+      assert(!publicText.includes(SECRET_MARK), '公共 DOM 中泄露了汤底特征串');
+    });
+    t2a('API Key 不出现在请求体（仅请求头）', async () => {
+      const bodyStr = win().__fetchMock.calls[0].opts.body;
+      assert(!bodyStr.includes('sk-test-12345'), 'API Key 泄露进请求体');
+    });
+    t2a('critical_yes 判定显示【是，且至关重要】', async () => {
+      setLlmResponder(() => mockLlmResponse('{"verdict":"critical_yes","text":"你触及了当年海难中最关键的真相。"}'));
+      const base = recordCount();
+      await sendQuestion('当年是不是有人用自己身体的一部分救了他？');
+      await waitForRecords(base + 2);
+      const last = lastRecord();
+      assert(last.querySelector('.item-verdict-tag').textContent.includes('至关重要'), 'critical_yes 标签未显示: ' + last.querySelector('.item-verdict-tag').textContent);
+    });
+    t2a('请求失败显示可操作错误，且可直接重试成功', async () => {
+      setLlmResponder(() => Promise.resolve(new (win().Response)('{"error":"boom"}', { status: 500 })));
+      const base = recordCount();
+      await sendQuestion('另一个会被拒绝的问题？');
+      // 玩家记录与系统错误记录都到位后再检查（玩家记录是同步入列的，必须等满 base+2）
+      await waitForRecords(base + 2, 30000);
+      const last = lastRecord();
+      assert(last.querySelector('.item-speaker').textContent.includes('系统'), '失败应产生系统错误记录');
+      assert(last.querySelector('.item-text').textContent.includes('请求失败'), '错误记录文本不符');
+
+      // 直接重试（换回 200 响应）
+      setLlmResponder(() => mockLlmResponse('{"verdict":"no","text":"否，与此无关。"}'));
+      await sendQuestion('重试的问题：男子是厨师吗？');
+      await waitForRecords(base + 4, 30000); // 错误回合 2 条 + 重试 1 问 1 答
+      assert(lastRecord().classList.contains('is-verdict'), '重试后应成功产生判定记录');
+    });
+    t2a('清空 API 配置后回退 Mock 闭环（fetch 不再被调用）', async () => {
+      setLlmResponder(() => mockLlmResponse('{"verdict":"yes","text":"不应被调用"}'));
+      configureApiViaUi('', 'sk-test-12345', 'mock-model-x'); // 清空 Base URL
+      const callsBefore = win().__fetchMock.calls.length;
+
+      const base = recordCount();
+      await sendQuestion('回退测试：男子喜欢喝汤吗？');
+      await waitForRecords(base + 2, 30000); // Mock 裁判 1200ms 延迟，且 IAB timer 可能被节流，轮询等待
+      assert(recordCount() === base + 2, 'Mock 闭环应产生 1 问 1 答（+' + (recordCount() - base) + '）');
+      assert(win().__fetchMock.calls.length === callsBefore, '清空配置后不应再发出直连请求');
     });
 
     // ================= 运行与渲染 =================
