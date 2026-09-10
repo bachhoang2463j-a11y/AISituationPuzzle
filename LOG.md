@@ -80,3 +80,11 @@
 - 验收结果：IAB 中 harness 49/49 断言全绿（上轮 43 项零回归；新增：夹具合法名单应用且记录清空、名单生效后主持人请求可见汤底而公共 DOM 无汤底、缺号/重名回退默认名单并诊断报错、超 3 名截断并警告、无 `<Puzzle>` 默认名单不白屏）。真酒馆楼层带 `<Puzzle>` 消息的场景待用户真机确认。
 - HASH：`9c34935`
 
+## 2026-09-11：完成第 6 轮——真实主持人问答 host-answer-v1
+
+- 变更行为：`TurtleSoup.html` 将主持人响应协议正式化为 `host-answer-v1`：提示词要求模型返回 `{"protocol":"host-answer-v1","question_id":"...","verdict":"yes|no|irrelevant|critical_yes","answer":"..."}`，`parseHostAnswerV1` 严格校验协议字段、question_id 匹配、verdict 值域与 answer 非空，任何不符整条拒绝并落入可重试的系统错误记录；建立玩家问题 `question_id` 账本（`q-N` 递增，玩家提问与判定记录共享同一 ID，存入 `GameState.request` 与记录项）；新增 60 秒请求超时（`TurtleApp.debug.hostTimeoutMs` 测试钩子可缩短）；新增停止能力：请求进行中发送按钮切换为"停止生成"，点击后本地立即回到可操作状态（`HOST_ABORTED` 动作）并尽力中断底层生成（酒馆路径 `stopGenerationById`、直连路径 `AbortController.abort()`），停止后可立即重试；迟到响应由第 3 轮的请求丢弃机制自动作废。MockAdapter 同步升级为返回 v1 格式。harness 全部 mock responder 升级为动态提取真实 question_id 的 v1 格式，新增第 6 轮断言组 5 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`、`README.md`（第 5 轮经用户确认后更新现状）。
+- 决策原因：计划第 6 轮定义。停止入口选择"请求进行中发送按钮兼作停止按钮"（不改视觉基线结构，仅切换文案）；超时阈值定为 60 秒（补上计划评审时遗留的量化项）。调试中发现并修复一处 TDZ 缺陷——`HOST_TIMEOUT_MS` 原定义在脚本后部，而 `TurtleApp` 字面量在执行期立即取值导致整段脚本中断，移至前部后恢复。
+- 验收结果：IAB 中 harness 54/54 断言全绿（上轮 49 项零回归；新增：停止按钮状态切换与 stopGenerationById 调用、v1 判定与提问共享 question_id、ID 不匹配整条拒绝可重试、缺 answer 字段拒绝、超时回到可操作且可重试）。
+- HASH：`44edc56`
+
