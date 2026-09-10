@@ -1,0 +1,2652 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="cozy-fireplace">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AI 海龟汤 - 壁炉夜话聚会</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;900&family=Kalam:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  
+  <style>
+    /* =========================================================
+       AI 海龟汤 - 壁炉夜话聚会 UI 样式系统 (4:1 布局 & 移动端适配)
+       ========================================================= */
+
+    :root {
+      --font-sans: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+      --font-note: 'Kalam', 'Noto Sans SC', cursive, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --transition-fast: 0.18s ease;
+      --transition-normal: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-bounce: 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+      /* 统一主题：壁炉夜话 · 通透微光玻璃拟态 (Cozy Glassmorphism) */
+      --bg-primary: #18120f;
+      --bg-surface: rgba(30, 21, 17, 0.62);
+      --bg-surface-glass: rgba(48, 35, 29, 0.75);
+      --bg-card: rgba(58, 43, 35, 0.78);
+      --border-subtle: rgba(245, 158, 11, 0.25);
+      --border-highlight: rgba(245, 158, 11, 0.6);
+      --accent-gold: #f59e0b;
+      --accent-gold-glow: rgba(245, 158, 11, 0.35);
+      --accent-sage: #8ba088;
+      --accent-emerald: #10b981;
+      --accent-cyan: #38bdf8;
+      --accent-red: #fb7185;
+      --accent-green: #34d399;
+      --text-main: #fdf7f2;
+      --text-secondary: #d4c4b7;
+      --text-muted: #9e8c80;
+      --bubble-bg: rgba(46, 33, 27, 0.95);
+      --bubble-border: rgba(245, 158, 11, 0.45);
+      --shadow-lg: 0 20px 48px -6px rgba(0, 0, 0, 0.65);
+      --shadow-sm: 0 4px 14px rgba(0, 0, 0, 0.25);
+      --svg-table-primary: #3d2b21;
+      --svg-table-rim: #634532;
+      --svg-table-inner: #2f2018;
+      --svg-spotlight: rgba(245, 158, 11, 0.32);
+    }
+
+    /* --- 全局重置 --- */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      -webkit-font-smoothing: antialiased;
+      transition: background-color var(--transition-normal), color var(--transition-normal);
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+      position: relative;
+    }
+
+    /* --- 顶部控制与状态栏 (微透明通透磨砂) --- */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.65rem 1.35rem;
+      background: var(--bg-surface);
+      backdrop-filter: blur(24px) saturate(1.2);
+      -webkit-backdrop-filter: blur(24px) saturate(1.2);
+      border-bottom: 1px solid var(--border-subtle);
+      z-index: 30;
+      flex-shrink: 0;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    }
+
+    .game-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-shrink: 0;
+    }
+
+    .meta-badge {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent-emerald);
+      box-shadow: 0 0 10px var(--accent-emerald);
+    }
+
+    .meta-title {
+      font-weight: 800;
+      font-size: 0.95rem;
+      letter-spacing: 0.02em;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    /* 汤面框：微透明渐变与金色高光边框 */
+    .soup-brief-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      background: linear-gradient(135deg, rgba(62, 47, 38, 0.7) 0%, rgba(42, 31, 25, 0.8) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.32);
+      padding: 0.4rem 0.95rem;
+      border-radius: 12px;
+      flex: 1;
+      max-width: 54%;
+      overflow: hidden;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 3px 12px rgba(0,0,0,0.25);
+    }
+
+    .brief-label {
+      font-size: 0.72rem;
+      font-weight: 800;
+      padding: 0.18rem 0.55rem;
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: #1a120e;
+      border-radius: 7px;
+      white-space: nowrap;
+      box-shadow: 0 2px 6px rgba(245, 158, 11, 0.3);
+    }
+
+    .brief-text {
+      font-size: 0.84rem;
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 500;
+    }
+
+    /* 顶部操作按钮组 (API / 设置 / 全屏) */
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-shrink: 0;
+    }
+
+    .top-action-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      background: linear-gradient(135deg, rgba(58, 44, 36, 0.7) 0%, rgba(40, 30, 24, 0.8) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      color: var(--text-main);
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 0.38rem 0.75rem;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: var(--transition-fast);
+      white-space: nowrap;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.2);
+    }
+
+    .top-action-btn:hover {
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.22) 0%, rgba(217, 119, 6, 0.3) 100%);
+      border-color: var(--accent-gold);
+      color: #fbbf24;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(245, 158, 11, 0.25);
+    }
+
+    .top-action-btn.btn-api {
+      border-color: rgba(245, 158, 11, 0.48);
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.18) 0%, rgba(217, 119, 6, 0.25) 100%);
+      color: #f59e0b;
+    }
+    .top-action-btn.btn-api:hover {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: #1a120e;
+    }
+
+    /* 移动端视图切换 Tab 栏 */
+    .mobile-view-tabs {
+      display: none;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 0.4rem 0.75rem;
+      gap: 0.5rem;
+      z-index: 25;
+    }
+
+    .mobile-tab-btn {
+      flex: 1;
+      padding: 0.48rem 0;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9px;
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      cursor: pointer;
+    }
+
+    .mobile-tab-btn.active {
+      background: var(--accent-gold);
+      color: #000;
+      border-color: var(--accent-gold);
+    }
+
+    /* --- 核心 4:1 布局 --- */
+    .main-layout {
+      display: grid;
+      grid-template-columns: 4fr 1fr;
+      flex: 1;
+      height: calc(100vh - 54px);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* =========================================================
+       左侧：4/5 发言推演与 SVG 聚会场景 (Stage Section)
+       ========================================================= */
+    .stage-section {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      background: var(--bg-primary);
+      border-right: 1px solid var(--border-subtle);
+      overflow: hidden;
+    }
+
+    .table-arena {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* --- 模糊背景大图与柔光氛围层 --- */
+    .photo-scene-bg {
+      position: absolute;
+      inset: -20px;
+      background-image: url('https://images.unsplash.com/photo-1728649072511-bd946044a63b?q=80&w=1742&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D');
+      background-size: cover;
+      background-position: center;
+      filter: blur(3.5px) brightness(0.92) saturate(1.1);
+      transform: scale(1.04);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .photo-scene-overlay {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 52% 45%, rgba(28, 21, 18, 0.05) 0%, rgba(28, 21, 18, 0.38) 100%);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* --- SVG 温馨实木圆桌背景 --- */
+    .svg-scene-background {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* 中心推演便签看板 (Memo Sticky Notes Board) */
+    .arena-memo-board {
+      position: absolute;
+      width: 320px;
+      height: 190px;
+      top: 50%;
+      left: 52%;
+      transform: translate(-50%, -50%);
+      z-index: 3;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      pointer-events: auto;
+    }
+
+    .memo-board-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.28rem 0.65rem;
+      background: linear-gradient(135deg, rgba(50, 37, 30, 0.8) 0%, rgba(36, 26, 21, 0.9) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      backdrop-filter: blur(8px);
+    }
+
+    .memo-board-title {
+      font-size: 0.78rem;
+      font-weight: 800;
+      color: var(--accent-gold);
+      letter-spacing: 0.04em;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .memo-board-status {
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+      color: #fbbf24;
+      background: rgba(245, 158, 11, 0.15);
+      padding: 0.15rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      font-weight: 700;
+    }
+
+    /* 便签卡片容器 */
+    .sticky-notes-cluster {
+      position: relative;
+      width: 100%;
+      height: 165px;
+    }
+
+    .sticky-note {
+      position: absolute;
+      width: 140px;
+      padding: 0.6rem 0.7rem;
+      border-radius: 4px 4px 12px 4px;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.2);
+      cursor: pointer;
+      transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), z-index 0.22s ease, box-shadow 0.22s ease;
+      font-family: var(--font-note);
+      user-select: none;
+      line-height: 1.35;
+    }
+
+    .sticky-note:hover {
+      transform: scale(1.08) rotate(0deg) !important;
+      z-index: 10 !important;
+      box-shadow: 0 14px 30px rgba(0, 0, 0, 0.65);
+    }
+
+    .note-pin {
+      position: absolute;
+      top: -7px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+
+    .note-tape {
+      position: absolute;
+      top: -7px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 44px;
+      height: 13px;
+      background: rgba(255, 255, 255, 0.55);
+      backdrop-filter: blur(3px);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+      border-radius: 2px;
+    }
+
+    .note-tag {
+      font-size: 0.65rem;
+      font-family: var(--font-sans);
+      font-weight: 800;
+      margin-bottom: 0.25rem;
+      display: inline-block;
+      padding: 0.12rem 0.45rem;
+      border-radius: 5px;
+      letter-spacing: 0.02em;
+    }
+
+    .note-text {
+      font-size: 0.86rem;
+      font-weight: 700;
+      color: #1f1815;
+    }
+
+    /* 便签丰富渐变与点缀配色 */
+    .note-yellow {
+      background: linear-gradient(135deg, #fef08a 0%, #fde047 100%);
+      border: 1px solid rgba(234, 179, 8, 0.45);
+      top: 5px;
+      left: 8px;
+      transform: rotate(-3deg);
+      z-index: 2;
+    }
+    .note-yellow .note-tag { background: #ca8a04; color: #fff; box-shadow: 0 1px 4px rgba(202, 138, 4, 0.4); }
+    .note-yellow .note-pin { background: #f87171; border: 1.5px solid #ef4444; }
+
+    .note-green {
+      background: linear-gradient(135deg, #bbf7d0 0%, #86efac 100%);
+      border: 1px solid rgba(34, 197, 94, 0.45);
+      top: 12px;
+      right: 10px;
+      transform: rotate(3.5deg);
+      z-index: 1;
+    }
+    .note-green .note-tag { background: #059669; color: #fff; box-shadow: 0 1px 4px rgba(5, 150, 105, 0.4); }
+    .note-green .note-pin { background: #60a5fa; border: 1.5px solid #3b82f6; }
+
+    .note-pink {
+      background: linear-gradient(135deg, #fecdd3 0%, #fda4af 100%);
+      border: 1px solid rgba(244, 63, 94, 0.45);
+      bottom: 8px;
+      left: 60px;
+      transform: rotate(-1.5deg);
+      z-index: 3;
+    }
+    .note-pink .note-tag { background: #e11d48; color: #fff; box-shadow: 0 1px 4px rgba(225, 29, 72, 0.4); }
+    .note-pink .note-pin { background: #fbbf24; border: 1.5px solid #f59e0b; }
+
+    .note-blue {
+      background: linear-gradient(135deg, #bae6fd 0%, #7dd3fc 100%);
+      border: 1px solid rgba(14, 165, 233, 0.45);
+      bottom: 2px;
+      right: 15px;
+      transform: rotate(2.5deg);
+      z-index: 2;
+    }
+    .note-blue .note-tag { background: #0284c7; color: #fff; box-shadow: 0 1px 4px rgba(2, 132, 199, 0.4); }
+    .note-blue .note-pin { background: #34d399; border: 1.5px solid #10b981; }
+
+    /* =========================================================
+       角色座席系统：大头像（放大50%）、无多余大外框、仅显示姓名
+       ========================================================= */
+    .seat-node {
+      position: absolute;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: transform var(--transition-normal);
+    }
+
+    /* 主持人：中偏上 */
+    .seat-host {
+      top: 5%;
+      left: 54%;
+      transform: translateX(-50%);
+    }
+
+    /* AI 伙伴 1：左上 */
+    .seat-ai-1 {
+      top: 18%;
+      left: 15%;
+    }
+
+    /* AI 伙伴 2：右上 */
+    .seat-ai-2 {
+      top: 18%;
+      left: 85%;
+      transform: translateX(-50%);
+    }
+
+    /* AI 伙伴 3：右下 */
+    .seat-ai-3 {
+      bottom: 8%;
+      left: 82%;
+      transform: translateX(-50%);
+    }
+
+    /* 玩家头像：左下角 */
+    .seat-player {
+      bottom: 8%;
+      left: 8%;
+    }
+
+    /* 极简角色座席卡片 */
+    .avatar-seat-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+      transition: transform var(--transition-bounce);
+      background: transparent;
+      border: none;
+      padding: 0;
+    }
+
+    .avatar-seat-card:hover {
+      transform: translateY(-5px);
+    }
+
+    .avatar-seat-card.is-player {
+      cursor: default;
+    }
+    .avatar-seat-card.is-player:hover {
+      transform: none;
+    }
+
+    /* 大头像容器 */
+    .avatar-wrapper {
+      width: 114px;
+      height: 114px;
+      position: relative;
+      border-radius: 28px;
+      background: linear-gradient(145deg, rgba(62, 47, 39, 0.85) 0%, rgba(42, 31, 25, 0.95) 100%);
+      border: 3.5px solid rgba(245, 158, 11, 0.35);
+      box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255,255,255,0.15);
+      transition: var(--transition-fast);
+    }
+
+    .avatar-seat-card:hover .avatar-wrapper {
+      box-shadow: 0 16px 40px -2px var(--accent-gold-glow), 0 6px 16px rgba(0,0,0,0.4);
+      border-color: var(--accent-gold);
+    }
+
+    /* 主持人突出头像 */
+    .host-wrapper {
+      width: 126px;
+      height: 126px;
+      border-radius: 32px;
+      border-color: rgba(245, 158, 11, 0.55);
+      box-shadow: 0 14px 38px -2px var(--accent-gold-glow), inset 0 1px 0 rgba(255,255,255,0.2);
+    }
+
+    .host-crown-badge {
+      position: absolute;
+      top: -12px;
+      right: -10px;
+      font-size: 1.35rem;
+      filter: drop-shadow(0 3px 8px rgba(0,0,0,0.5));
+      z-index: 3;
+      animation: crownBounce 2.5s infinite ease-in-out;
+    }
+
+    @keyframes crownBounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+
+    /* 玩家头像标识 */
+    .player-wrapper {
+      border-color: rgba(56, 189, 248, 0.6);
+      box-shadow: 0 12px 32px -4px rgba(56, 189, 248, 0.4);
+    }
+
+    .avatar-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 24px;
+      display: block;
+    }
+
+    .host-wrapper .avatar-img {
+      border-radius: 28px;
+    }
+
+    .status-indicator {
+      position: absolute;
+      bottom: 0px;
+      right: 0px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent-emerald);
+      border: 2.5px solid var(--bg-card);
+      box-shadow: 0 0 8px var(--accent-emerald);
+    }
+
+    .status-indicator.user-active {
+      background: var(--accent-cyan);
+      box-shadow: 0 0 8px var(--accent-cyan);
+    }
+
+    /* 姓名铭牌 (微光渐变胶囊) */
+    .char-name {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--text-main);
+      background: linear-gradient(135deg, rgba(54, 40, 33, 0.85) 0%, rgba(38, 27, 22, 0.95) 100%);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 0.28rem 0.85rem;
+      border-radius: 14px;
+      border: 1.5px solid rgba(245, 158, 11, 0.35);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08);
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+      transition: var(--transition-fast);
+      margin-top: 4px;
+    }
+
+    .avatar-seat-card:hover .char-name {
+      color: #fbbf24;
+      border-color: var(--accent-gold);
+      box-shadow: 0 6px 18px var(--accent-gold-glow);
+    }
+
+    .player-name {
+      color: var(--accent-cyan);
+      border-color: rgba(56, 189, 248, 0.5);
+    }
+
+    /* 优雅轻量人设编辑按钮 */
+    .edit-persona-btn {
+      position: absolute;
+      bottom: -2px;
+      left: -2px;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(62, 47, 39, 0.95) 0%, rgba(42, 31, 25, 0.98) 100%);
+      border: 1.5px solid rgba(245, 158, 11, 0.4);
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transform: scale(0.8);
+      transition: var(--transition-fast);
+      cursor: pointer;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+      z-index: 4;
+    }
+
+    .avatar-seat-card:hover .edit-persona-btn {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    .edit-persona-btn:hover {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: #1a120e;
+      border-color: var(--accent-gold);
+    }
+
+    /* 语音发言动画 */
+    .speaking-wave {
+      display: none;
+      position: absolute;
+      top: -10px;
+      right: -10px;
+      background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+      padding: 4px 7px;
+      border-radius: 10px;
+      gap: 2px;
+      align-items: flex-end;
+      height: 16px;
+      box-shadow: 0 2px 10px rgba(245, 158, 11, 0.4);
+      z-index: 3;
+    }
+
+    .speaking-wave span {
+      width: 2.5px;
+      height: 12px;
+      background: #1a120e;
+      border-radius: 1px;
+      animation: waveAnim 0.6s infinite ease-in-out alternate;
+    }
+    .speaking-wave span:nth-child(2) { animation-delay: 0.2s; }
+    .speaking-wave span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes waveAnim {
+      0% { height: 4px; }
+      100% { height: 13px; }
+    }
+
+    .seat-node.speaking .speaking-wave { display: flex; }
+    .seat-node.speaking .avatar-wrapper {
+      border-color: var(--accent-gold);
+      animation: avatarWarmGlow 1.2s infinite alternate;
+    }
+
+    @keyframes avatarWarmGlow {
+      0% { box-shadow: 0 0 14px var(--accent-gold-glow); }
+      100% { box-shadow: 0 0 32px var(--accent-gold); }
+    }
+
+    /* --- 气泡对话框 (磨砂玻璃与金色微光) --- */
+    .speech-bubble-anchor {
+      position: relative;
+      width: 0;
+      height: 0;
+    }
+
+    .speech-bubble {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%) scale(0.95);
+      background: linear-gradient(145deg, rgba(50, 36, 29, 0.95) 0%, rgba(34, 24, 19, 0.98) 100%);
+      border: 1.5px solid rgba(245, 158, 11, 0.42);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 16px;
+      padding: 0.8rem 1.05rem;
+      width: 250px;
+      box-shadow: 0 20px 48px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.1);
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.25s ease, transform 0.25s ease, visibility 0.25s;
+      z-index: 20;
+    }
+
+    .speech-bubble::after {
+      content: '';
+      position: absolute;
+      bottom: -7px;
+      left: 50%;
+      transform: translateX(-50%) rotate(45deg);
+      width: 12px;
+      height: 12px;
+      background: rgba(34, 24, 19, 0.98);
+      border-right: 1.5px solid rgba(245, 158, 11, 0.42);
+      border-bottom: 1.5px solid rgba(245, 158, 11, 0.42);
+    }
+
+    .seat-node.speaking {
+      z-index: 30;
+    }
+
+    .seat-node.speaking .speech-bubble,
+    .seat-node:hover .speech-bubble {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(-50%) scale(1);
+    }
+
+    /* 主持人位于顶部，气泡改为在头像下方弹出，避免被顶部状态栏遮挡 */
+    .seat-host .speech-bubble {
+      bottom: auto;
+      top: 175px;
+      transform: translateX(-50%) scale(0.95);
+    }
+
+    .seat-host.speaking .speech-bubble,
+    .seat-host:hover .speech-bubble {
+      transform: translateX(-50%) scale(1);
+    }
+
+    .seat-host .speech-bubble::after {
+      bottom: auto;
+      top: -7px;
+      border-right: none;
+      border-bottom: none;
+      border-left: 1.5px solid rgba(245, 158, 11, 0.42);
+      border-top: 1.5px solid rgba(245, 158, 11, 0.42);
+    }
+
+    .bubble-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.35rem;
+      font-size: 0.75rem;
+    }
+
+    .bubble-role {
+      color: var(--accent-gold);
+      font-weight: 800;
+    }
+
+    .bubble-verdict {
+      font-weight: 800;
+      font-size: 0.72rem;
+    }
+
+    .tag-yes { color: var(--accent-green); }
+    .tag-no { color: var(--accent-red); }
+    .tag-irrelevant { color: var(--text-muted); }
+
+    .bubble-content {
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: var(--text-main);
+    }
+
+    /* --- 底部推演输入栏 (微透明通透磨砂底栏) --- */
+    .stage-control-bar {
+      padding: 0.95rem 1.35rem;
+      background: var(--bg-surface);
+      backdrop-filter: blur(24px) saturate(1.2);
+      -webkit-backdrop-filter: blur(24px) saturate(1.2);
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      z-index: 15;
+      flex-shrink: 0;
+      box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.25);
+    }
+
+    .input-form {
+      display: flex;
+      gap: 0.65rem;
+    }
+
+    .input-wrapper {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      background: linear-gradient(135deg, rgba(48, 35, 29, 0.8) 0%, rgba(34, 24, 20, 0.9) 100%);
+      border: 1.5px solid rgba(245, 158, 11, 0.32);
+      border-radius: 14px;
+      padding: 0.55rem 0.95rem;
+      transition: var(--transition-fast);
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.35), 0 3px 10px rgba(0,0,0,0.2);
+    }
+
+    .input-wrapper:focus-within {
+      border-color: var(--accent-gold);
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.35), 0 0 0 3.5px var(--accent-gold-glow);
+    }
+
+    .input-prefix {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--accent-gold);
+      margin-right: 0.45rem;
+      white-space: nowrap;
+    }
+
+    #player-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
+      font-size: 0.88rem;
+      font-family: var(--font-sans);
+    }
+
+    #player-input::placeholder { color: var(--text-muted); }
+
+    .send-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+      color: #1a120e;
+      font-weight: 800;
+      font-size: 0.86rem;
+      padding: 0 1.45rem;
+      border-radius: 13px;
+      border: none;
+      cursor: pointer;
+      transition: var(--transition-fast);
+      white-space: nowrap;
+      box-shadow: 0 4px 18px var(--accent-gold-glow), inset 0 1px 0 rgba(255,255,255,0.25);
+    }
+
+    .send-btn:hover {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 22px var(--accent-gold-glow);
+    }
+
+    /* =========================================================
+       右侧：1/5 对话记录区 (微透明通透磨砂侧栏 & 渐变卡片)
+       ========================================================= */
+    .dialogue-section {
+      display: flex;
+      flex-direction: column;
+      background: rgba(24, 17, 14, 0.58);
+      backdrop-filter: blur(28px) saturate(1.25);
+      -webkit-backdrop-filter: blur(28px) saturate(1.25);
+      height: 100%;
+      overflow: hidden;
+      border-left: 1px solid var(--border-subtle);
+    }
+
+    .dialogue-header {
+      padding: 0.95rem 1.15rem 0.75rem 1.15rem;
+      border-bottom: 1px solid rgba(245, 158, 11, 0.18);
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+
+    .header-main {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .sidebar-title {
+      font-size: 0.88rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+
+    .record-counter {
+      font-size: 0.72rem;
+      font-family: var(--font-mono);
+      background: rgba(245, 158, 11, 0.15);
+      padding: 0.15rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #fbbf24;
+      font-weight: 700;
+    }
+
+    .filter-tabs {
+      display: flex;
+      background: rgba(34, 24, 20, 0.85);
+      padding: 3px;
+      border-radius: 9px;
+      border: 1px solid rgba(245, 158, 11, 0.22);
+    }
+
+    .filter-tab {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      padding: 0.3rem 0;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: var(--transition-fast);
+      font-weight: 600;
+    }
+
+    .filter-tab.active {
+      background: linear-gradient(135deg, rgba(68, 50, 40, 0.95) 0%, rgba(48, 35, 28, 0.98) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.45);
+      color: #fbbf24;
+      font-weight: 700;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+
+    .dialogue-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.95rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-subtle) transparent;
+    }
+
+    .dialogue-list::-webkit-scrollbar { width: 4px; }
+    .dialogue-list::-webkit-scrollbar-thumb {
+      background: var(--border-subtle);
+      border-radius: 4px;
+    }
+
+    /* 独立气泡卡片：通透渐变与精致点缀色边框 */
+    .dialogue-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      background: linear-gradient(135deg, rgba(54, 40, 33, 0.72) 0%, rgba(38, 27, 22, 0.88) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.22);
+      border-radius: 13px;
+      padding: 0.7rem 0.85rem;
+      animation: fadeInMsg 0.25s ease-out;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.06);
+    }
+
+    @keyframes fadeInMsg {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .dialogue-item.is-verdict {
+      border-left: 3.5px solid var(--accent-gold);
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(42, 31, 25, 0.88) 100%);
+      border-color: rgba(245, 158, 11, 0.35);
+      border-left-color: var(--accent-gold);
+    }
+
+    .dialogue-item.is-player {
+      border-left: 3.5px solid var(--accent-cyan);
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.12) 0%, rgba(42, 31, 25, 0.88) 100%);
+      border-color: rgba(56, 189, 248, 0.35);
+      border-left-color: var(--accent-cyan);
+    }
+
+    .item-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.72rem;
+    }
+
+    .item-speaker {
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .item-verdict-tag {
+      font-weight: 800;
+      font-size: 0.68rem;
+      padding: 0.14rem 0.5rem;
+      border-radius: 6px;
+      letter-spacing: 0.02em;
+    }
+
+    .tag-yes-bg {
+      background: rgba(16, 185, 129, 0.24);
+      border: 1px solid rgba(16, 185, 129, 0.5);
+      color: #34d399;
+      box-shadow: 0 1px 6px rgba(16, 185, 129, 0.25);
+    }
+    .tag-no-bg {
+      background: rgba(244, 63, 94, 0.24);
+      border: 1px solid rgba(244, 63, 94, 0.5);
+      color: #fb7185;
+      box-shadow: 0 1px 6px rgba(244, 63, 94, 0.25);
+    }
+    .tag-irrelevant-bg {
+      background: rgba(156, 163, 175, 0.2);
+      border: 1px solid rgba(156, 163, 175, 0.4);
+      color: #cbd5e1;
+    }
+
+    .item-text {
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: var(--text-main);
+      word-break: break-word;
+    }
+
+    /* =========================================================
+       通用弹窗系统与独立 API 配置控件 (通透磨砂与高光边框)
+       ========================================================= */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(12, 8, 6, 0.72);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.25s ease, visibility 0.25s ease;
+    }
+
+    .modal-overlay.active {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .persona-modal {
+      width: 500px;
+      max-width: 92vw;
+      background: linear-gradient(145deg, rgba(46, 33, 27, 0.95) 0%, rgba(28, 20, 16, 0.98) 100%);
+      border: 1.5px solid rgba(245, 158, 11, 0.35);
+      border-radius: 20px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transform: scale(0.94);
+      transition: transform var(--transition-bounce);
+    }
+
+    .modal-overlay.active .persona-modal { transform: scale(1); }
+
+    .modal-header {
+      padding: 1.15rem 1.35rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(245, 158, 11, 0.22);
+      background: linear-gradient(180deg, rgba(62, 46, 38, 0.75) 0%, rgba(42, 30, 24, 0.85) 100%);
+    }
+
+    .modal-title-group {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .modal-avatar-preview {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 2px solid var(--accent-gold);
+      box-shadow: 0 2px 10px var(--accent-gold-glow);
+    }
+
+    .modal-avatar-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .modal-title {
+      font-size: 1rem;
+      font-weight: 800;
+      color: var(--text-main);
+    }
+
+    .modal-subtitle {
+      font-size: 0.74rem;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    .close-modal-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 1.15rem;
+      cursor: pointer;
+      padding: 0.25rem 0.5rem;
+      border-radius: 7px;
+      transition: var(--transition-fast);
+    }
+    .close-modal-btn:hover { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+
+    .modal-body {
+      padding: 1.25rem 1.35rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.95rem;
+      overflow-y: auto;
+      max-height: 65vh;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+    .flex-1 { flex: 1; }
+
+    .form-label {
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: var(--text-secondary);
+    }
+
+    .modal-input, .modal-textarea {
+      background: rgba(22, 15, 12, 0.85);
+      border: 1.5px solid rgba(245, 158, 11, 0.25);
+      border-radius: 10px;
+      padding: 0.55rem 0.85rem;
+      color: var(--text-main);
+      font-size: 0.86rem;
+      font-family: var(--font-sans);
+      outline: none;
+      transition: var(--transition-fast);
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+    }
+
+    .modal-input:focus, .modal-textarea:focus {
+      border-color: var(--accent-gold);
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.3), 0 0 0 3px var(--accent-gold-glow);
+    }
+
+    .avatar-preset-picker {
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+    }
+
+    .preset-thumb {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      object-fit: cover;
+      cursor: pointer;
+      border: 2.5px solid transparent;
+      transition: var(--transition-fast);
+    }
+    .preset-thumb.active {
+      border-color: var(--accent-gold);
+      box-shadow: 0 0 10px var(--accent-gold-glow);
+      transform: scale(1.05);
+    }
+
+    /* 独立 API 配置卡片模块 */
+    .char-api-card {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 0.8rem 0.95rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .char-api-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .char-api-toggle-title {
+      font-size: 0.8rem;
+      font-weight: 800;
+      color: var(--accent-gold);
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .char-api-toggle-desc {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-top: 1px;
+    }
+
+    /* 开关组件 */
+    .switch-toggle {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+
+    .switch-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .switch-slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background-color: var(--bg-primary);
+      border: 1px solid var(--border-subtle);
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 22px;
+    }
+
+    .switch-slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 2px;
+      bottom: 2px;
+      background-color: var(--text-secondary);
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 50%;
+    }
+
+    .switch-toggle input:checked + .switch-slider {
+      background-color: var(--accent-gold);
+      border-color: var(--accent-gold);
+    }
+
+    .switch-toggle input:checked + .switch-slider:before {
+      transform: translateX(18px);
+      background-color: #000;
+    }
+
+    /* 快捷模型胶囊标签 */
+    .preset-model-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+
+    .model-tag {
+      font-size: 0.72rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 6px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-weight: 600;
+      transition: var(--transition-fast);
+    }
+    .model-tag:hover {
+      border-color: var(--accent-gold);
+      color: var(--accent-gold);
+    }
+
+    /* 设置项列表 */
+    .settings-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .settings-item:last-child { border-bottom: none; }
+
+    .settings-title {
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .settings-desc {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* 头像库管理组件 */
+    .settings-avatar-mgr {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .settings-mgr-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .avatar-add-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .btn-sm {
+      padding: 0.32rem 0.75rem !important;
+      font-size: 0.75rem !important;
+      white-space: nowrap;
+    }
+
+    .avatar-lib-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+      gap: 0.55rem;
+      max-height: 135px;
+      overflow-y: auto;
+      background: var(--bg-primary);
+      padding: 0.55rem;
+      border-radius: 12px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .avatar-lib-item {
+      position: relative;
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 2px solid var(--border-subtle);
+      transition: var(--transition-fast);
+      background: var(--bg-card);
+      flex-shrink: 0;
+    }
+
+    .avatar-lib-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .avatar-lib-item:hover {
+      border-color: var(--accent-gold);
+      transform: scale(1.05);
+    }
+
+    .avatar-lib-del-btn {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(244, 63, 94, 0.88);
+      color: #fff;
+      border: none;
+      font-size: 0.65rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      opacity: 0;
+      transition: var(--transition-fast);
+    }
+
+    .avatar-lib-item:hover .avatar-lib-del-btn {
+      opacity: 1;
+    }
+
+    .modal-footer {
+      padding: 0.95rem 1.35rem;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.65rem;
+    }
+
+    .modal-btn {
+      padding: 0.5rem 1.25rem;
+      border-radius: 9px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      transition: var(--transition-fast);
+    }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+    }
+    .btn-secondary:hover { background: var(--bg-primary); }
+    .btn-primary {
+      background: var(--accent-gold);
+      color: #000;
+      box-shadow: 0 2px 8px var(--accent-gold-glow);
+    }
+    .btn-primary:hover { filter: brightness(1.1); }
+
+    /* =========================================================
+       移动端竖向布局深度适配
+       ========================================================= */
+    @media (max-width: 860px) {
+      .top-bar {
+        padding: 0.55rem 0.85rem;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+      }
+      .soup-brief-bar {
+        order: 3;
+        max-width: 100%;
+        width: 100%;
+      }
+      .top-actions {
+        margin-left: auto;
+      }
+
+      .mobile-view-tabs {
+        display: flex;
+      }
+
+      .main-layout {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 105px);
+      }
+
+      .stage-section {
+        flex: 1;
+        width: 100%;
+        height: 100%;
+        border-right: none;
+      }
+
+      .dialogue-section {
+        flex: 1;
+        width: 100%;
+        height: 100%;
+        border-left: none;
+      }
+
+      .main-layout[data-mobile-view="stage"] .dialogue-section {
+        display: none !important;
+      }
+      .main-layout[data-mobile-view="stage"] .stage-section {
+        display: flex !important;
+      }
+
+      .main-layout[data-mobile-view="dialogue"] .stage-section {
+        display: none !important;
+      }
+      .main-layout[data-mobile-view="dialogue"] .dialogue-section {
+        display: flex !important;
+      }
+
+      .arena-memo-board {
+        width: 275px;
+        height: 160px;
+        left: 50%;
+      }
+      .sticky-note {
+        width: 120px;
+        padding: 0.45rem 0.55rem;
+      }
+      .note-text { font-size: 0.76rem; }
+
+      .seat-host { top: 3%; left: 50%; }
+      .seat-ai-1 { top: 18%; left: 10%; }
+      .seat-ai-2 { top: 18%; left: 88%; }
+      .seat-ai-3 { bottom: 10%; left: 86%; }
+      .seat-player { bottom: 10%; left: 8%; }
+
+      .avatar-wrapper {
+        width: 78px;
+        height: 78px;
+        border-radius: 20px;
+      }
+      .avatar-img { border-radius: 17px; }
+      .host-wrapper {
+        width: 86px;
+        height: 86px;
+      }
+      .char-name {
+        font-size: 0.74rem;
+        padding: 0.15rem 0.5rem;
+      }
+      .speech-bubble {
+        width: 195px;
+        font-size: 0.76rem;
+      }
+      .seat-host .speech-bubble {
+        top: 125px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- 顶部状态栏与功能操作区 (API / 设置 / 全屏) -->
+    <header class="top-bar">
+      <div class="game-meta">
+        <div class="meta-badge"></div>
+        <span class="meta-title">🪵 聚会海龟汤 · 壁炉夜话</span>
+      </div>
+
+      <div class="soup-brief-bar">
+        <span class="brief-label">汤面</span>
+        <p class="brief-text" id="soup-brief-text">男子走进一家餐厅点了一碗海龟汤，尝了一口后，冲出餐厅自杀了。为什么？</p>
+      </div>
+
+      <div class="top-actions">
+        <button class="top-action-btn btn-api" onclick="openGlobalApiModal()" title="全局 API 接口配置">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+          <span>API</span>
+        </button>
+        <button class="top-action-btn" onclick="openSettingsModal()" title="游戏设置">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>设置</span>
+        </button>
+        <button class="top-action-btn" onclick="toggleFullScreen()" title="全屏模式">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+          <span id="fullscreen-text">全屏</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- 移动端视图切换 Tabs -->
+    <div class="mobile-view-tabs">
+      <button class="mobile-tab-btn active" id="tab-btn-stage" onclick="switchMobileView('stage')">
+        <span>🪵 聚会圆桌</span>
+      </button>
+      <button class="mobile-tab-btn" id="tab-btn-dialogue" onclick="switchMobileView('dialogue')">
+        <span>📜 讨论与判定</span>
+      </button>
+    </div>
+
+    <!-- 核心 4:1 两列主体布局 -->
+    <main class="main-layout" data-mobile-view="stage" id="main-layout">
+      
+      <!-- 左侧：4 分区（圆桌发言与推演主台） -->
+      <section class="stage-section">
+        <div class="table-arena" id="table-arena">
+          
+          <!-- 模糊背景大图与柔光氛围层 -->
+          <div class="photo-scene-bg"></div>
+          <div class="photo-scene-overlay"></div>
+
+          <!-- SVG 场景背景：温馨实木聚会圆桌与顶光柔影 -->
+          <svg class="svg-scene-background" viewBox="0 0 1000 650" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <!-- 顶部吊灯暖光晕 -->
+              <radialGradient id="spotlightGrad" cx="54%" cy="48%" r="50%">
+                <stop offset="0%" stop-color="var(--svg-spotlight)" stop-opacity="1" />
+                <stop offset="60%" stop-color="var(--svg-spotlight)" stop-opacity="0.35" />
+                <stop offset="100%" stop-color="transparent" stop-opacity="0" />
+              </radialGradient>
+
+              <!-- 原木圆桌外圈渐变 -->
+              <radialGradient id="tableOuterGrad" cx="50%" cy="50%" r="50%">
+                <stop offset="80%" stop-color="var(--svg-table-primary)" />
+                <stop offset="97%" stop-color="var(--svg-table-rim)" />
+                <stop offset="100%" stop-color="rgba(0,0,0,0.4)" />
+              </radialGradient>
+
+              <!-- 原木圆桌内圈磨砂台面 -->
+              <radialGradient id="tableInnerGrad" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="var(--svg-table-inner)" />
+                <stop offset="85%" stop-color="var(--svg-table-primary)" />
+                <stop offset="100%" stop-color="var(--svg-table-rim)" />
+              </radialGradient>
+
+              <!-- 柔和桌体投影 -->
+              <filter id="tableShadow" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#000000" flood-opacity="0.4" />
+              </filter>
+            </defs>
+
+            <!-- 吊灯柔和投光 -->
+            <ellipse cx="540" cy="335" rx="380" ry="230" fill="url(#spotlightGrad)" />
+
+            <!-- 主实木圆桌桌面 (精简缩小版) -->
+            <ellipse cx="540" cy="340" rx="310" ry="175" fill="url(#tableOuterGrad)" filter="url(#tableShadow)" stroke="var(--border-subtle)" stroke-width="1.5" />
+            
+            <!-- 圆桌内圈木纹装饰轨 -->
+            <ellipse cx="540" cy="340" rx="265" ry="142" fill="url(#tableInnerGrad)" stroke="var(--border-subtle)" stroke-width="1.2" stroke-dasharray="6 6" opacity="0.75" />
+
+            <!-- 温馨桌面同心圆氛围环 -->
+            <circle cx="540" cy="340" r="92" fill="none" stroke="var(--accent-gold)" stroke-width="1" stroke-dasharray="4 6" opacity="0.22" />
+          </svg>
+
+          <!-- 桌面中央：便签看板 (Sticky Memo Board) -->
+          <div class="arena-memo-board">
+            <div class="memo-board-header">
+              <span class="memo-board-title">📌 聚会推演便签墙</span>
+              <span class="memo-board-status">已整理 3 / 8</span>
+            </div>
+            
+            <!-- 手账便签簇 -->
+            <div class="sticky-notes-cluster">
+              
+              <!-- 便签 1 -->
+              <div class="sticky-note note-yellow" onclick="inspectClue('盲人男子：失明使得他无法亲眼看到在荒岛上吃到的肉')">
+                <div class="note-pin"></div>
+                <div class="note-tag">已确认事实</div>
+                <div class="note-text">盲人男子：曾遭遇严重海难幸存</div>
+              </div>
+
+              <!-- 便签 2 -->
+              <div class="sticky-note note-green" onclick="inspectClue('同伴牺牲：为了让他活下去，谎称是海龟肉')">
+                <div class="note-pin"></div>
+                <div class="note-tag">重要线索</div>
+                <div class="note-text">同伴曾喂他所谓的“海龟肉”</div>
+              </div>
+
+              <!-- 便签 3 -->
+              <div class="sticky-note note-pink" onclick="inspectClue('自杀动机：意识到当年吃的肉是同伴的肉')">
+                <div class="note-pin"></div>
+                <div class="note-tag">核心疑问</div>
+                <div class="note-text">为何尝到真正的汤后会绝望自杀？</div>
+              </div>
+
+              <!-- 便签 4 -->
+              <div class="sticky-note note-blue" onclick="inspectClue('餐厅正规性：餐厅的海龟汤是真实无毒的')">
+                <div class="note-tape"></div>
+                <div class="note-tag">已排除</div>
+                <div class="note-text">餐厅的海龟汤并无毒药或恶意</div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- 主持人 AI（中上方） -->
+          <div class="seat-node seat-host" id="seat-host" data-char-id="host">
+            <div class="speech-bubble-anchor">
+              <div class="speech-bubble" id="bubble-host">
+                <div class="bubble-header">
+                  <span class="bubble-role">赫尔墨斯</span>
+                  <span class="bubble-verdict tag-yes">【是，且至关重要】</span>
+                </div>
+                <div class="bubble-content">他过去吃到的并不是真正的海龟肉。请大家继续推断背后的真相。</div>
+              </div>
+            </div>
+            <div class="avatar-seat-card" onclick="openPersonaModal('host')">
+              <div class="avatar-wrapper host-wrapper">
+                <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80" alt="赫尔墨斯" class="avatar-img">
+                <div class="host-crown-badge" title="汤主">👑</div>
+                <div class="status-indicator"></div>
+                <div class="speaking-wave"><span></span><span></span><span></span></div>
+                <button class="edit-persona-btn" title="编辑设定与独立API" onclick="event.stopPropagation(); openPersonaModal('host')">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                </button>
+              </div>
+              <div class="char-name">赫尔墨斯</div>
+            </div>
+          </div>
+
+          <!-- 环绕座席：AI 伙伴 1 (左上方) -->
+          <div class="seat-node seat-ai-1" id="seat-ai-1" data-char-id="ai-1">
+            <div class="speech-bubble-anchor">
+              <div class="speech-bubble" id="bubble-ai-1">
+                <div class="bubble-header">
+                  <span class="bubble-role">艾文</span>
+                </div>
+                <div class="bubble-content">他在海难中是不是失去了视力或者失去了味觉？</div>
+              </div>
+            </div>
+            <div class="avatar-seat-card" onclick="openPersonaModal('ai-1')">
+              <div class="avatar-wrapper">
+                <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80" alt="艾文" class="avatar-img">
+                <div class="status-indicator"></div>
+                <div class="speaking-wave"><span></span><span></span><span></span></div>
+                <button class="edit-persona-btn" title="编辑设定与独立API" onclick="event.stopPropagation(); openPersonaModal('ai-1')">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                </button>
+              </div>
+              <div class="char-name">艾文</div>
+            </div>
+          </div>
+
+          <!-- 环绕座席：AI 伙伴 2 (右上方) -->
+          <div class="seat-node seat-ai-2" id="seat-ai-2" data-char-id="ai-2">
+            <div class="speech-bubble-anchor">
+              <div class="speech-bubble" id="bubble-ai-2">
+                <div class="bubble-header">
+                  <span class="bubble-role">索菲亚</span>
+                </div>
+                <div class="bubble-content">海难同伴为了让他活下去，是不是牺牲了自己做成了食物？</div>
+              </div>
+            </div>
+            <div class="avatar-seat-card" onclick="openPersonaModal('ai-2')">
+              <div class="avatar-wrapper">
+                <img src="https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80" alt="索菲亚" class="avatar-img">
+                <div class="status-indicator"></div>
+                <div class="speaking-wave"><span></span><span></span><span></span></div>
+                <button class="edit-persona-btn" title="编辑设定与独立API" onclick="event.stopPropagation(); openPersonaModal('ai-2')">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                </button>
+              </div>
+              <div class="char-name">索菲亚</div>
+            </div>
+          </div>
+
+          <!-- 环绕座席：AI 伙伴 3 (右下方) -->
+          <div class="seat-node seat-ai-3" id="seat-ai-3" data-char-id="ai-3">
+            <div class="speech-bubble-anchor">
+              <div class="speech-bubble" id="bubble-ai-3">
+                <div class="bubble-header">
+                  <span class="bubble-role">诺亚</span>
+                </div>
+                <div class="bubble-content">这家餐厅里的海龟汤是正规且名副其实的吗？</div>
+              </div>
+            </div>
+            <div class="avatar-seat-card" onclick="openPersonaModal('ai-3')">
+              <div class="avatar-wrapper">
+                <img src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80" alt="诺亚" class="avatar-img">
+                <div class="status-indicator"></div>
+                <div class="speaking-wave"><span></span><span></span><span></span></div>
+                <button class="edit-persona-btn" title="编辑设定与独立API" onclick="event.stopPropagation(); openPersonaModal('ai-3')">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                </button>
+              </div>
+              <div class="char-name">诺亚</div>
+            </div>
+          </div>
+
+          <!-- 玩家头像（严格固定于左下角） -->
+          <div class="seat-node seat-player" id="seat-player" data-char-id="player">
+            <div class="speech-bubble-anchor">
+              <div class="speech-bubble" id="bubble-player">
+                <div class="bubble-header">
+                  <span class="bubble-role">我</span>
+                </div>
+                <div class="bubble-content">他在餐厅喝到真正的海龟汤时，意识到当年救命的“海龟汤”其实是同伴的肉！</div>
+              </div>
+            </div>
+            <div class="avatar-seat-card is-player">
+              <div class="avatar-wrapper player-wrapper">
+                <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80" alt="我" class="avatar-img">
+                <div class="status-indicator user-active"></div>
+                <div class="speaking-wave"><span></span><span></span><span></span></div>
+              </div>
+              <div class="char-name player-name">我 (YOU)</div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 底部推演发言输入栏 -->
+        <div class="stage-control-bar">
+          <div class="input-form">
+            <div class="input-wrapper">
+              <span class="input-prefix">❓ 提问或推理：</span>
+              <input type="text" id="player-input" placeholder="输入可用‘是/否/无关’回答的问题，或直接猜出真相..." autocomplete="off">
+            </div>
+            <button class="send-btn" id="btn-send">
+              <span>发言 / 破汤</span>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右侧：1 分区（对话历史记录区） -->
+      <aside class="dialogue-section">
+        <div class="dialogue-header">
+          <div class="header-main">
+            <span class="sidebar-title">聚会推演记录</span>
+            <span class="record-counter" id="record-counter">6 条</span>
+          </div>
+          <div class="filter-tabs">
+            <button class="filter-tab active" data-filter="all">全部</button>
+            <button class="filter-tab" data-filter="verdict">裁判判定</button>
+            <button class="filter-tab" data-filter="player">我的提问</button>
+          </div>
+        </div>
+
+        <!-- 滚动对话日志列表 -->
+        <div class="dialogue-list" id="dialogue-list"></div>
+      </aside>
+
+    </main>
+
+    <!-- 弹窗 1：全局 API 配置模态弹窗 -->
+    <div class="modal-overlay" id="global-api-modal-overlay">
+      <div class="persona-modal" style="width: 520px;">
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <div style="font-size: 1.4rem;">🔑</div>
+            <div>
+              <h3 class="modal-title">全局 API 接口配置</h3>
+              <p class="modal-subtitle">设置海龟汤游戏中 AI 角色默认调用的大模型接口</p>
+            </div>
+          </div>
+          <button class="close-modal-btn" onclick="closeGlobalApiModal()">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">API 接口地址 (Base URL)</label>
+            <input type="text" id="global-api-url" class="modal-input" placeholder="例如：https://api.openai.com/v1 或中转站地址">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <input type="password" id="global-api-key" class="modal-input" placeholder="sk-...">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label class="form-label">默认模型 (Model)</label>
+              <input type="text" id="global-api-model" class="modal-input" placeholder="例如：gpt-4o / deepseek-chat">
+            </div>
+            <div class="form-group" style="width: 120px;">
+              <label class="form-label">默认 Temperature</label>
+              <input type="number" id="global-api-temp" class="modal-input" min="0" max="2" step="0.1" value="0.7">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">快捷预设模型</label>
+            <div class="preset-model-tags">
+              <span class="model-tag" onclick="selectPresetModel('gpt-4o')">gpt-4o</span>
+              <span class="model-tag" onclick="selectPresetModel('deepseek-chat')">deepseek-chat</span>
+              <span class="model-tag" onclick="selectPresetModel('claude-3-5-sonnet-20241022')">claude-3.5-sonnet</span>
+              <span class="model-tag" onclick="selectPresetModel('gemini-1.5-pro')">gemini-1.5-pro</span>
+              <span class="model-tag" onclick="selectPresetModel('qwen-plus')">qwen-plus</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="modal-btn btn-secondary" onclick="closeGlobalApiModal()">取消</button>
+          <button class="modal-btn btn-primary" onclick="saveGlobalApiModal()">保存全局配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 2：游戏环境设置模态弹窗 -->
+    <div class="modal-overlay" id="settings-modal-overlay">
+      <div class="persona-modal" style="width: 480px;">
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <div style="font-size: 1.4rem;">⚙️</div>
+            <div>
+              <h3 class="modal-title">游戏环境设置</h3>
+              <p class="modal-subtitle">管理海龟汤推演规则与本地数据</p>
+            </div>
+          </div>
+          <button class="close-modal-btn" onclick="closeSettingsModal()">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="settings-item">
+            <div>
+              <div class="settings-title">AI 伙伴自动协作推演</div>
+              <div class="settings-desc">玩家每次提问后，AI 好友是否自动接力推理</div>
+            </div>
+            <label class="switch-toggle">
+              <input type="checkbox" id="setting-ai-auto" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div class="settings-item">
+            <div>
+              <div class="settings-title">发言音波与光环动效</div>
+              <div class="settings-desc">角色发言时展示头像呼吸光环与跳动音波</div>
+            </div>
+            <label class="switch-toggle">
+              <input type="checkbox" id="setting-avatar-anim" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div class="settings-item">
+            <div>
+              <div class="settings-title">清空本局对话历史</div>
+              <div class="settings-desc">重置右侧所有提问与裁判判定记录</div>
+            </div>
+            <button class="modal-btn btn-secondary" style="padding: 0.32rem 0.85rem; font-size: 0.76rem;" onclick="clearDialogueHistory()">清空记录</button>
+          </div>
+
+          <!-- 头像库 URL 管理 -->
+          <div class="settings-avatar-mgr">
+            <div class="settings-mgr-header">
+              <div>
+                <div class="settings-title">🖼️ 头像库 URL 管理</div>
+                <div class="settings-desc">自定义预设头像库，添加的 URL 可在所有人设编辑中直接选用</div>
+              </div>
+              <button class="modal-btn btn-secondary btn-sm" onclick="resetDefaultAvatarLibrary()">重置默认库</button>
+            </div>
+
+            <!-- 添加新头像输入栏 -->
+            <div class="avatar-add-row">
+              <input type="text" id="input-new-avatar-url" class="modal-input flex-1" placeholder="输入头像图片 URL (https://... 或本地相对路径)">
+              <button class="modal-btn btn-primary btn-sm" onclick="addNewAvatarToLibrary()">+ 添加头像</button>
+            </div>
+
+            <!-- 已保存头像卡片网格 -->
+            <div class="avatar-lib-grid" id="avatar-lib-grid"></div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="modal-btn btn-primary" onclick="closeSettingsModal()">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 弹窗 3：AI 好友设定与独立 API 配置模态弹窗 -->
+    <div class="modal-overlay" id="persona-modal-overlay">
+      <div class="persona-modal" id="persona-modal">
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <div class="modal-avatar-preview">
+              <img id="modal-avatar-img" src="" alt="头像预览">
+            </div>
+            <div>
+              <h3 class="modal-title" id="modal-char-title">编辑好友设定</h3>
+              <p class="modal-subtitle" id="modal-char-subtitle">自定义该角色的讨论逻辑、提示词与独立 API</p>
+            </div>
+          </div>
+          <button class="close-modal-btn" onclick="closePersonaModal()">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">姓名</label>
+            <input type="text" id="modal-input-name" class="modal-input" placeholder="例如：赫尔墨斯">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">AI 提示词 (System Prompt)</label>
+            <textarea id="modal-input-prompt" class="modal-textarea" rows="4" placeholder="定义该角色在聚会中的讨论风格与提问策略..."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">更换头像 (从头像库选择或自定义 URL)</label>
+            <div class="avatar-preset-picker" id="modal-persona-preset-picker"></div>
+            <div style="margin-top: 0.35rem; display: flex; gap: 0.5rem;">
+              <input type="text" id="modal-char-avatar-url-direct" class="modal-input flex-1" placeholder="或在此直接输入/粘贴头像图片 URL..." oninput="onDirectAvatarUrlInput(this.value)">
+            </div>
+          </div>
+
+          <!-- 每个人物独立的专属 API 配置模块 -->
+          <div class="char-api-card">
+            <div class="char-api-toggle-row">
+              <div>
+                <div class="char-api-toggle-title">🔑 独立专属 API / 模型</div>
+                <div class="char-api-toggle-desc">启用后将使用独立接口与专属模型，关闭则沿用全局</div>
+              </div>
+              <label class="switch-toggle">
+                <input type="checkbox" id="modal-char-api-enable" onchange="toggleCharApiFields()">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div id="modal-char-api-fields" style="display: none; flex-direction: column; gap: 0.65rem; padding-top: 0.25rem;">
+              <div class="form-group">
+                <label class="form-label">专属 Base URL (留空则沿用全局)</label>
+                <input type="text" id="modal-char-api-url" class="modal-input" placeholder="留空沿用全局 Base URL">
+              </div>
+              <div class="form-group">
+                <label class="form-label">专属 API Key (留空则沿用全局)</label>
+                <input type="password" id="modal-char-api-key" class="modal-input" placeholder="留空沿用全局 API Key">
+              </div>
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label class="form-label">专属模型名称</label>
+                  <input type="text" id="modal-char-api-model" class="modal-input" placeholder="例如：deepseek-chat / gpt-4o">
+                </div>
+                <div class="form-group" style="width: 120px;">
+                  <label class="form-label">独立 Temperature</label>
+                  <input type="number" id="modal-char-api-temp" class="modal-input" min="0" max="2" step="0.1" value="0.7">
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="modal-footer">
+          <button class="modal-btn btn-secondary" onclick="closePersonaModal()">取消</button>
+          <button class="modal-btn btn-primary" onclick="savePersonaModal()">保存设定</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 核心交互逻辑 -->
+  <script>
+    // --- 全局 API 配置对象与本地持久化 ---
+    let globalApiConfig = {
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "",
+      model: "gpt-4o",
+      temperature: 0.7
+    };
+
+    // 从本地存储读取全局 API 配置
+    const savedGlobalApi = localStorage.getItem("ai_turtle_global_api");
+    if (savedGlobalApi) {
+      try {
+        globalApiConfig = { ...globalApiConfig, ...JSON.parse(savedGlobalApi) };
+      } catch (e) {}
+    }
+
+    // --- 初始 AI 朋友人设数据库 (包含独立 API 支持) ---
+    const charactersData = {
+      host: {
+        id: "host",
+        name: "赫尔墨斯",
+        avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80",
+        prompt: "你是海龟汤游戏的主持朋友赫尔墨斯。你掌握着完整汤底真相。朋友们向你提出闭合性问题时，你需温和客观地回答：【是】、【否】、【与此无关】或【是，且至关重要】。",
+        isHost: true,
+        apiConfig: {
+          enabled: false,
+          baseUrl: "",
+          apiKey: "",
+          model: "",
+          temperature: 0.7
+        }
+      },
+      "ai-1": {
+        id: "ai-1",
+        name: "艾文",
+        avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80",
+        prompt: "你是玩家的朋友艾文。性格沉稳严谨，擅长从物理规律、因果时序切入提问。",
+        isHost: false,
+        apiConfig: {
+          enabled: false,
+          baseUrl: "",
+          apiKey: "",
+          model: "",
+          temperature: 0.7
+        }
+      },
+      "ai-2": {
+        id: "ai-2",
+        name: "索菲亚",
+        avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80",
+        prompt: "你是玩家的朋友索菲亚。性格热情开朗，擅长从人物情感动机和心理侧写切入，大胆假设各种可能性。",
+        isHost: false,
+        apiConfig: {
+          enabled: false,
+          baseUrl: "",
+          apiKey: "",
+          model: "",
+          temperature: 0.7
+        }
+      },
+      "ai-3": {
+        id: "ai-3",
+        name: "诺亚",
+        avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80",
+        prompt: "你是玩家的朋友诺亚。性格细致温和，擅长核对汤面中每个细节的真实含义与潜在盲区。",
+        isHost: false,
+        apiConfig: {
+          enabled: false,
+          baseUrl: "",
+          apiKey: "",
+          model: "",
+          temperature: 0.7
+        }
+      }
+    };
+
+    // --- 对话历史记录列表 ---
+    let dialogueHistory = [
+      {
+        id: 1,
+        speakerId: "ai-1",
+        speakerName: "艾文",
+        text: "汤主，男子在喝汤前就知道海龟汤的味道吗？",
+        type: "question",
+        verdict: null
+      },
+      {
+        id: 2,
+        speakerId: "host",
+        speakerName: "赫尔墨斯",
+        text: "否。他此前从未尝过真正的海龟汤。",
+        type: "verdict",
+        verdict: "no",
+        verdictLabel: "【否】"
+      },
+      {
+        id: 3,
+        speakerId: "ai-2",
+        speakerName: "索菲亚",
+        text: "他以前是不是经历过海难，并且有人为了救他给他吃过某种肉？",
+        type: "question",
+        verdict: null
+      },
+      {
+        id: 4,
+        speakerId: "host",
+        speakerName: "赫尔墨斯",
+        text: "是，且至关重要！他的朋友在海难绝境中骗他那是海龟肉。",
+        type: "verdict",
+        verdict: "yes",
+        verdictLabel: "【是，且至关重要】"
+      },
+      {
+        id: 5,
+        speakerId: "player",
+        speakerName: "我 (YOU)",
+        text: "那家餐厅的海龟汤里有毒吗？",
+        type: "question",
+        verdict: null
+      },
+      {
+        id: 6,
+        speakerId: "host",
+        speakerName: "赫尔墨斯",
+        text: "否。那只是一碗完全正常、货真价实的海龟汤。",
+        type: "verdict",
+        verdict: "no",
+        verdictLabel: "【否】"
+      }
+    ];
+
+    let currentEditingCharId = null;
+    let currentFilter = "all";
+
+    // --- 初始化 ---
+    document.addEventListener("DOMContentLoaded", () => {
+      renderDialogueList();
+      bindInputEvents();
+    });
+
+    // --- 全屏模式切换 ---
+    function toggleFullScreen() {
+      const fsText = document.getElementById("fullscreen-text");
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => console.log(err));
+        if (fsText) fsText.textContent = "退出全屏";
+      } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+        if (fsText) fsText.textContent = "全屏";
+      }
+    }
+
+    document.addEventListener("fullscreenchange", () => {
+      const fsText = document.getElementById("fullscreen-text");
+      if (!document.fullscreenElement && fsText) {
+        fsText.textContent = "全屏";
+      }
+    });
+
+    // --- 全局 API 弹窗逻辑 ---
+    function openGlobalApiModal() {
+      document.getElementById("global-api-url").value = globalApiConfig.baseUrl;
+      document.getElementById("global-api-key").value = globalApiConfig.apiKey;
+      document.getElementById("global-api-model").value = globalApiConfig.model;
+      document.getElementById("global-api-temp").value = globalApiConfig.temperature;
+      document.getElementById("global-api-modal-overlay").classList.add("active");
+    }
+
+    function closeGlobalApiModal() {
+      document.getElementById("global-api-modal-overlay").classList.remove("active");
+    }
+
+    function selectPresetModel(modelName) {
+      document.getElementById("global-api-model").value = modelName;
+    }
+
+    function saveGlobalApiModal() {
+      const url = document.getElementById("global-api-url").value.trim();
+      const key = document.getElementById("global-api-key").value.trim();
+      const model = document.getElementById("global-api-model").value.trim();
+      const temp = parseFloat(document.getElementById("global-api-temp").value) || 0.7;
+
+      globalApiConfig.baseUrl = url || "https://api.openai.com/v1";
+      globalApiConfig.apiKey = key;
+      globalApiConfig.model = model || "gpt-4o";
+      globalApiConfig.temperature = temp;
+
+      localStorage.setItem("ai_turtle_global_api", JSON.stringify(globalApiConfig));
+      closeGlobalApiModal();
+    }
+
+    // --- 头像库全局管理与持久化 ---
+    const DEFAULT_AVATAR_LIBRARY = [
+      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=300&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80"
+    ];
+
+    let avatarLibrary = [...DEFAULT_AVATAR_LIBRARY];
+    const savedLib = localStorage.getItem("ai_turtle_avatar_library");
+    if (savedLib) {
+      try {
+        const parsed = JSON.parse(savedLib);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          avatarLibrary = parsed;
+        }
+      } catch (e) {}
+    }
+
+    function saveAvatarLibrary() {
+      localStorage.setItem("ai_turtle_avatar_library", JSON.stringify(avatarLibrary));
+    }
+
+    function renderAvatarLibraryInSettings() {
+      const grid = document.getElementById("avatar-lib-grid");
+      if (!grid) return;
+      grid.innerHTML = "";
+
+      avatarLibrary.forEach((url, idx) => {
+        const item = document.createElement("div");
+        item.className = "avatar-lib-item";
+        item.innerHTML = `
+          <img src="${escapeHtml(url)}" alt="头像 ${idx + 1}" onerror="this.src='https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'">
+          <button class="avatar-lib-del-btn" title="从库中删除" onclick="deleteAvatarFromLibrary(${idx})">✕</button>
+        `;
+        grid.appendChild(item);
+      });
+    }
+
+    function addNewAvatarToLibrary() {
+      const input = document.getElementById("input-new-avatar-url");
+      if (!input) return;
+      const url = input.value.trim();
+      if (!url) {
+        alert("请输入有效的头像图片 URL 地址");
+        return;
+      }
+
+      if (avatarLibrary.includes(url)) {
+        alert("该头像 URL 已在头像库中");
+        return;
+      }
+
+      avatarLibrary.push(url);
+      saveAvatarLibrary();
+      input.value = "";
+      renderAvatarLibraryInSettings();
+    }
+
+    function deleteAvatarFromLibrary(idx) {
+      if (avatarLibrary.length <= 1) {
+        alert("头像库至少需保留一个头像");
+        return;
+      }
+      avatarLibrary.splice(idx, 1);
+      saveAvatarLibrary();
+      renderAvatarLibraryInSettings();
+    }
+
+    function resetDefaultAvatarLibrary() {
+      if (confirm("确定要恢复默认头像库列表吗？")) {
+        avatarLibrary = [...DEFAULT_AVATAR_LIBRARY];
+        saveAvatarLibrary();
+        renderAvatarLibraryInSettings();
+      }
+    }
+
+    // --- 系统设置弹窗逻辑 ---
+    function openSettingsModal() {
+      renderAvatarLibraryInSettings();
+      document.getElementById("settings-modal-overlay").classList.add("active");
+    }
+
+    function closeSettingsModal() {
+      document.getElementById("settings-modal-overlay").classList.remove("active");
+    }
+
+    function clearDialogueHistory() {
+      if (confirm("确定要清空本局的所有对话推演记录吗？")) {
+        dialogueHistory = [];
+        renderDialogueList();
+      }
+    }
+
+    // --- 移动端视图切换 ---
+    function switchMobileView(viewName) {
+      const layout = document.getElementById("main-layout");
+      const stageBtn = document.getElementById("tab-btn-stage");
+      const dialogueBtn = document.getElementById("tab-btn-dialogue");
+      
+      layout.setAttribute("data-mobile-view", viewName);
+      if (viewName === "stage") {
+        stageBtn.classList.add("active");
+        dialogueBtn.classList.remove("active");
+      } else {
+        dialogueBtn.classList.add("active");
+        stageBtn.classList.remove("active");
+      }
+    }
+
+    // --- 线索便签快速点击 ---
+    function inspectClue(clueDetail) {
+      const inputEl = document.getElementById("player-input");
+      if (inputEl) {
+        inputEl.value = `关于线索：${clueDetail.split('：')[0]}？`;
+        inputEl.focus();
+      }
+    }
+
+    // --- 渲染右侧对话记录列表 ---
+    function renderDialogueList() {
+      const listEl = document.getElementById("dialogue-list");
+      if (!listEl) return;
+
+      listEl.innerHTML = "";
+
+      const filtered = dialogueHistory.filter(item => {
+        if (currentFilter === "verdict") return item.type === "verdict";
+        if (currentFilter === "player") return item.speakerId === "player";
+        return true;
+      });
+
+      filtered.forEach(item => {
+        const itemEl = document.createElement("div");
+        itemEl.className = `dialogue-item ${item.type === 'verdict' ? 'is-verdict' : ''} ${item.speakerId === 'player' ? 'is-player' : ''}`;
+        
+        let verdictTagHtml = "";
+        if (item.verdict) {
+          const tagClass = item.verdict === 'yes' ? 'tag-yes-bg' : item.verdict === 'no' ? 'tag-no-bg' : 'tag-irrelevant-bg';
+          verdictTagHtml = `<span class="item-verdict-tag ${tagClass}">${item.verdictLabel || ''}</span>`;
+        }
+
+        itemEl.innerHTML = `
+          <div class="item-meta">
+            <span class="item-speaker">${escapeHtml(item.speakerName)}</span>
+            ${verdictTagHtml}
+          </div>
+          <div class="item-text">${escapeHtml(item.text)}</div>
+        `;
+        listEl.appendChild(itemEl);
+      });
+
+      listEl.scrollTop = listEl.scrollHeight;
+
+      const counterEl = document.getElementById("record-counter");
+      if (counterEl) counterEl.textContent = `${dialogueHistory.length} 条`;
+    }
+
+    // 绑定筛选标签
+    document.querySelectorAll(".filter-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".filter-tab").forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        currentFilter = tab.dataset.filter;
+        renderDialogueList();
+      });
+    });
+
+    // --- 提问交互 ---
+    function bindInputEvents() {
+      const sendBtn = document.getElementById("btn-send");
+      const inputEl = document.getElementById("player-input");
+
+      function handleSend() {
+        const text = inputEl.value.trim();
+        if (!text) return;
+
+        playerSpeak(text);
+        inputEl.value = "";
+
+        setTimeout(() => {
+          hostEvaluate(text);
+        }, 1200);
+      }
+
+      sendBtn.addEventListener("click", handleSend);
+      inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") handleSend();
+      });
+    }
+
+    function playerSpeak(text) {
+      triggerSpeakerBubble("player", "我", text);
+      
+      dialogueHistory.push({
+        id: Date.now(),
+        speakerId: "player",
+        speakerName: "我 (YOU)",
+        text: text,
+        type: "question",
+        verdict: null
+      });
+      renderDialogueList();
+    }
+
+    function hostEvaluate(questionText) {
+      let verdict = "yes";
+      let verdictLabel = "【是】";
+      let hostReply = "是的。你的推论切中了海难背后的故事。";
+
+      if (questionText.includes("毒") || questionText.includes("谋杀") || questionText.includes("味道不好")) {
+        verdict = "no";
+        verdictLabel = "【否】";
+        hostReply = "否。完全与毒药或餐厅无关。";
+      } else if (questionText.includes("天气") || questionText.includes("名字") || questionText.includes("钱")) {
+        verdict = "irrelevant";
+        verdictLabel = "【与此无关】";
+        hostReply = "与此无关，请将焦点放回海难与那碗汤的本质。";
+      } else if (questionText.includes("人肉") || questionText.includes("同伴") || questionText.includes("牺牲") || questionText.includes("真相")) {
+        verdict = "yes";
+        verdictLabel = "【是，且汤底揭晓】";
+        hostReply = "完全正确！盲人男子在喝到真海龟汤的刹那，终于明白了当年在荒岛上同伴割下自己的肉救了他，愧疚与痛苦让他彻底崩溃！破汤成功！🎉";
+      }
+
+      triggerSpeakerBubble("host", charactersData.host.name, `${verdictLabel} ${hostReply}`, verdict);
+
+      dialogueHistory.push({
+        id: Date.now() + 1,
+        speakerId: "host",
+        speakerName: charactersData.host.name,
+        text: `${verdictLabel} ${hostReply}`,
+        type: "verdict",
+        verdict: verdict,
+        verdictLabel: verdictLabel
+      });
+      renderDialogueList();
+    }
+
+    function triggerSpeakerBubble(charId, speakerTitle, content, verdictType = null) {
+      const node = document.getElementById(`seat-${charId}`);
+      const bubble = document.getElementById(`bubble-${charId}`);
+      if (!node || !bubble) return;
+
+      document.querySelectorAll(".seat-node").forEach(n => n.classList.remove("speaking"));
+      node.classList.add("speaking");
+
+      const headerRole = bubble.querySelector(".bubble-role");
+      const headerVerdict = bubble.querySelector(".bubble-verdict");
+      const contentEl = bubble.querySelector(".bubble-content");
+
+      if (headerRole) headerRole.textContent = speakerTitle;
+      if (contentEl) contentEl.textContent = content;
+
+      if (headerVerdict) {
+        if (verdictType === "yes") {
+          headerVerdict.className = "bubble-verdict tag-yes";
+          headerVerdict.textContent = "【是】";
+        } else if (verdictType === "no") {
+          headerVerdict.className = "bubble-verdict tag-no";
+          headerVerdict.textContent = "【否】";
+        } else if (verdictType === "irrelevant") {
+          headerVerdict.className = "bubble-verdict tag-irrelevant";
+          headerVerdict.textContent = "【无关】";
+        } else {
+          headerVerdict.textContent = "";
+        }
+      }
+
+      setTimeout(() => {
+        node.classList.remove("speaking");
+      }, 4500);
+    }
+
+    // --- AI 人设模态弹窗逻辑 (含角色专属 API 配置) ---
+    function toggleCharApiFields() {
+      const enableCheck = document.getElementById("modal-char-api-enable");
+      const fieldsBox = document.getElementById("modal-char-api-fields");
+      if (enableCheck && fieldsBox) {
+        fieldsBox.style.display = enableCheck.checked ? "flex" : "none";
+      }
+    }
+
+    function renderPersonaAvatarPicker(selectedSrc) {
+      const picker = document.getElementById("modal-persona-preset-picker");
+      if (!picker) return;
+      picker.innerHTML = "";
+
+      avatarLibrary.forEach((url) => {
+        const img = document.createElement("img");
+        img.src = url;
+        img.className = `preset-thumb ${url === selectedSrc ? 'active' : ''}`;
+        img.onclick = () => selectPresetAvatar(url);
+        picker.appendChild(img);
+      });
+
+      const directInput = document.getElementById("modal-char-avatar-url-direct");
+      if (directInput) directInput.value = selectedSrc || "";
+    }
+
+    function onDirectAvatarUrlInput(url) {
+      const trimmed = url.trim();
+      if (trimmed) {
+        selectPresetAvatar(trimmed, false);
+      }
+    }
+
+    function selectPresetAvatar(src, updateInput = true) {
+      const previewImg = document.getElementById("modal-avatar-img");
+      if (previewImg) previewImg.src = src;
+
+      if (updateInput) {
+        const directInput = document.getElementById("modal-char-avatar-url-direct");
+        if (directInput) directInput.value = src;
+      }
+
+      document.querySelectorAll(".preset-thumb").forEach(thumb => {
+        if (thumb.src === src) thumb.classList.add("active");
+        else thumb.classList.remove("active");
+      });
+    }
+
+    function openPersonaModal(charId) {
+      if (charId === "player") return;
+      currentEditingCharId = charId;
+      const data = charactersData[charId];
+      if (!data) return;
+
+      const modalOverlay = document.getElementById("persona-modal-overlay");
+      const titleEl = document.getElementById("modal-char-title");
+      const subEl = document.getElementById("modal-char-subtitle");
+      const previewImg = document.getElementById("modal-avatar-img");
+      const nameInput = document.getElementById("modal-input-name");
+      const promptInput = document.getElementById("modal-input-prompt");
+
+      const apiEnableCheck = document.getElementById("modal-char-api-enable");
+      const apiUrlInput = document.getElementById("modal-char-api-url");
+      const apiKeyInput = document.getElementById("modal-char-api-key");
+      const apiModelInput = document.getElementById("modal-char-api-model");
+      const apiTempInput = document.getElementById("modal-char-api-temp");
+
+      titleEl.textContent = `编辑 ${data.name} 的设定`;
+      subEl.textContent = data.isHost ? "自定义海龟汤主持人的评判逻辑与专属 API" : "配置好友的讨论逻辑与专属 API";
+      previewImg.src = data.avatar;
+      nameInput.value = data.name;
+      promptInput.value = data.prompt;
+
+      // 读取并填入角色独立 API 配置
+      const cfg = data.apiConfig || { enabled: false, baseUrl: "", apiKey: "", model: "", temperature: 0.7 };
+      apiEnableCheck.checked = cfg.enabled;
+      apiUrlInput.value = cfg.baseUrl || "";
+      apiKeyInput.value = cfg.apiKey || "";
+      apiModelInput.value = cfg.model || "";
+      apiTempInput.value = cfg.temperature || 0.7;
+
+      toggleCharApiFields();
+
+      // 渲染动态头像库预设
+      renderPersonaAvatarPicker(data.avatar);
+
+      modalOverlay.classList.add("active");
+    }
+
+    function closePersonaModal() {
+      document.getElementById("persona-modal-overlay").classList.remove("active");
+      currentEditingCharId = null;
+    }
+
+    function savePersonaModal() {
+      if (!currentEditingCharId || !charactersData[currentEditingCharId]) return;
+
+      const char = charactersData[currentEditingCharId];
+      const nameInput = document.getElementById("modal-input-name").value.trim();
+      const promptInput = document.getElementById("modal-input-prompt").value.trim();
+      const previewImg = document.getElementById("modal-avatar-img").src;
+
+      const apiEnableCheck = document.getElementById("modal-char-api-enable").checked;
+      const apiUrlInput = document.getElementById("modal-char-api-url").value.trim();
+      const apiKeyInput = document.getElementById("modal-char-api-key").value.trim();
+      const apiModelInput = document.getElementById("modal-char-api-model").value.trim();
+      const apiTempInput = parseFloat(document.getElementById("modal-char-api-temp").value) || 0.7;
+
+      if (nameInput) char.name = nameInput;
+      if (promptInput) char.prompt = promptInput;
+      char.avatar = previewImg;
+
+      // 保存角色专属 API
+      char.apiConfig = {
+        enabled: apiEnableCheck,
+        baseUrl: apiUrlInput,
+        apiKey: apiKeyInput,
+        model: apiModelInput,
+        temperature: apiTempInput
+      };
+
+      const seatNode = document.getElementById(`seat-${currentEditingCharId}`);
+      if (seatNode) {
+        const nameEl = seatNode.querySelector(".char-name");
+        const avatarImgEl = seatNode.querySelector(".avatar-img");
+
+        if (nameEl) nameEl.textContent = char.name;
+        if (avatarImgEl) avatarImgEl.src = char.avatar;
+      }
+
+      closePersonaModal();
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>

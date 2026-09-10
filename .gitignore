@@ -1,0 +1,20 @@
+# 废弃备份（已归档的无效实现，不进入版本）
+备份（无需阅读）/
+Backup/
+TurtleSoup.html.bak
+*.bak
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+.vscode/
+.idea/
+
+# ZCode 缓存
+.zcode/
+
+# 依赖（若后续引入构建）
+node_modules/
+dist/
