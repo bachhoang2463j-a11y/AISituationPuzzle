@@ -96,3 +96,11 @@
 - 验收结果：IAB 中 harness 58/58 断言全绿（上轮 54 项零回归；新增：完整回合顺序与伙伴气泡、伙伴请求 system+user 双向无汤底、伙伴失败跳过后主持人仍回答玩家问题、停止后回到 awaiting-player 且无自动续轮）。
 - HASH：`4c8e4ab`
 
+## 2026-09-11：完成第 8 轮——三个伙伴与真实模式（逐角色请求）
+
+- 变更行为：`TurtleSoup.html` 将单伙伴扩展为 0~N 伙伴真实模式：`GameState.cast` 记录本局名单，`activePeerIds()` 决定参与座位；每轮 `SUBMIT_QUESTION` 时为每个启用伙伴独立抽取 Bernoulli(0.5) 写入 `request.speakerQueue`（回合内不可变，`TurtleApp.debug.peerRandom` 测试钩子可注入确定性随机源）；伙伴批次按队列**串行**请求（顺序即显示顺序），新增 `PEER_BATCH_DONE` 动作统一进入主持人阶段，单个伙伴失败只记系统提示并继续（不丢失其他成功结果）；`applyCastToSeats()` 按名单隐藏多余 AI 座位，重置时恢复默认名单（含 `charactersData` 角色名）；`validateCast` 放宽为允许 0 伙伴（仅主持人，对齐 SPEC 2.1.5 的 0~N 目标，SPEC 8.1 同步修订）；Mock 伙伴按角色返回不同发言文本；`serializeState` 增加 `cast`。harness：`mountApp` 默认注入"仅 ai-1 抽中"的确定性抽样（既有断言的 2 请求 4 记录预期零改动），peer responder 按请求动态返回对应 `actor_id`，新增第 8 轮断言组 5 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`、`SPEC.md`。
+- 决策原因：计划第 8 轮。抽样确定性是回归测试的前提，故引入 `peerRandom` 钩子而非固定种子；串行请求以最小复杂度保证 SPEC 的"显示顺序 = 队列顺序"约束（并行优化留待后续需要时）。调试中发现并修复两处产物缺陷：0 伙伴时 `nums[0] !== 1` 对空数组误报编号错误（跳过空名单检查）；RESET 未恢复被 APPLY_CAST 修改的 `charactersData` 角色名（重置时同步恢复默认名单）。另修正一处断言文本匹配（第 8 轮失败记录文案变化）。
+- 验收结果：IAB 中 harness 63/63 断言全绿（上轮 58 项零回归；新增：三伙伴全抽中按序请求且账本一一对应、安静回合跳过伙伴、部分失败不丢失成功结果、1 伙伴局座位隐藏、0 伙伴局直接进主持人阶段且重置恢复默认）。
+- HASH：`c2f22dd`
+
