@@ -2195,7 +2195,8 @@
       records: INITIAL_RECORDS.map(record => ({ ...record })),
       bubbles: {},                    // charId -> 最近气泡内容
       initialBubbles: {},             // 启动时从 DOM 快照，重置时恢复
-      request: null                   // 进行中请求 { id, type, startedAt, abortRequested }，非空时拒绝新请求
+      request: null,                  // 进行中请求 { id, type, startedAt, abortRequested }，非空时拒绝新请求
+      puzzleInput: null               // 启动时的谜题输入结果 { source, cast, error, warning }
     };
 
     let currentEditingCharId = null;
@@ -2205,9 +2206,9 @@
     document.addEventListener("DOMContentLoaded", () => {
       snapshotInitialBubbles();
       TavernAdapter.detect();
-      renderDiagnosis();
       render();
       bindInputEvents();
+      loadPuzzleFromContext(); // 异步：完成后应用 <Puzzle> 名单或回退默认，并刷新诊断
     });
 
     // 启动时快照初始 demo 气泡，供重置恢复
@@ -2485,7 +2486,8 @@
       SUBMIT_QUESTION: "submit-question",
       HOST_ANSWERED: "host-answered",
       HOST_FAILED: "host-failed",
-      RESET_GAME: "reset-game"
+      RESET_GAME: "reset-game",
+      APPLY_CAST: "apply-cast"
     };
 
     let requestSeq = 0;
@@ -2549,6 +2551,26 @@
           GameState.turn = 0;
           GameState.request = null; // 放弃进行中的请求，其迟到响应会被 handleSend 丢弃
           break;
+
+        case GameAction.APPLY_CAST: {
+          // action.cast = { host, peers[] }，来自合法 <Puzzle>；座位名与角色数据同步，新局从零记录开始
+          const cast = action.cast;
+          charactersData.host.name = cast.host;
+          cast.peers.forEach((name, i) => {
+            const charId = "ai-" + (i + 1);
+            if (charactersData[charId]) charactersData[charId].name = name;
+          });
+          ["host", "ai-1", "ai-2", "ai-3"].forEach(charId => {
+            const seat = document.getElementById("seat-" + charId);
+            const nameEl = seat && seat.querySelector(".char-name");
+            if (nameEl && charactersData[charId]) nameEl.textContent = charactersData[charId].name;
+          });
+          GameState.records = [];
+          GameState.bubbles = {};
+          GameState.phase = "awaiting-player";
+          GameState.turn = 0;
+          break;
+        }
       }
       render();
     }
@@ -2559,8 +2581,14 @@
 
     // --- View 层：统一渲染入口（幂等，可安全重复调用） ---
     function render() {
+      renderSoupBar();
       renderDialogueList();
       renderBubbles();
+    }
+
+    function renderSoupBar() {
+      const el = document.getElementById("soup-brief-text");
+      if (el) el.textContent = GameState.soup.surface;
     }
 
     function renderBubbles() {
@@ -2688,6 +2716,127 @@
       if (globalApiConfig.baseUrl) return DirectApiAdapter;
       if (TavernAdapter.available) return TavernAdapter;
       return MockAdapter;
+    }    // --- 第 5 轮：<Puzzle> 输入协议（SPEC 8.1）：消息提取 -> YAML 解析 -> 名单校验 -> 应用 ---
+    // 从最新消息往回找 <Puzzle>；缺失返回 null，重复/交叉返回 { error }
+    function findPuzzleInMessages(messages) {
+      let found = null;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const raw = messages[i] && messages[i].message;
+        if (typeof raw !== "string" || raw.indexOf("<Puzzle") < 0) continue;
+        const blocks = raw.match(/<Puzzle\s*>[\s\S]*?<\/Puzzle\s*>/gi) || [];
+        if (blocks.length > 1) return { error: "单条消息包含 " + blocks.length + " 个 <Puzzle> 区块" };
+        if (blocks.length === 1) {
+          if (found) return { error: "多条消息包含 <Puzzle> 区块" };
+          const m = /<Puzzle\s*>([\s\S]*?)<\/Puzzle\s*>/i.exec(raw);
+          found = m ? m[1] : null;
+        }
+      }
+      return found === null ? null : { yaml: found };
+    }
+
+    // 优先酒馆助手的 YAML 库；无则用受限行式解析（仅支持 游戏数据栏 的两级 key: value 结构）
+    function parsePuzzleYaml(text) {
+      if (window.YAML && typeof window.YAML.parse === "function") {
+        return window.YAML.parse(text);
+      }
+      return parseSimplePuzzleYaml(text);
+    }
+
+    function parseSimplePuzzleYaml(text) {
+      const result = {};
+      let currentTop = null;
+      String(text).split(/\r?\n/).forEach(rawLine => {
+        const line = rawLine.replace(/\s+$/, "");
+        if (!line.trim() || line.trim().indexOf("#") === 0) return;
+        const isTop = /^[^\s#][^:]*:\s*$/.test(line);
+        if (isTop) {
+          currentTop = line.replace(/:\s*$/, "").trim();
+          if (!(currentTop in result)) result[currentTop] = {};
+          return;
+        }
+        const kv = /^([^\s#][^:]*):\s*(.*)$/.exec(line.trim());
+        if (kv && currentTop) {
+          let value = kv[2].trim();
+          if ((value.length > 1 && value.charAt(0) === '"' && value.slice(-1) === '"') ||
+              (value.length > 1 && value.charAt(0) === "'" && value.slice(-1) === "'")) {
+            value = value.slice(1, -1);
+          }
+          result[currentTop][kv[1].trim()] = value;
+        }
+      });
+      return result;
+    }
+
+    // 返回 { ok: true, cast: { host, peers }, warning? } 或 { ok: false, error }
+    function validateCast(parsed) {
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { ok: false, error: "YAML 顶层不是对象" };
+      }
+      const bar = parsed["游戏数据栏"];
+      if (!bar || typeof bar !== "object" || Array.isArray(bar)) {
+        return { ok: false, error: "缺少 游戏数据栏 对象" };
+      }
+      const host = typeof bar["主持人"] === "string" ? bar["主持人"].trim() : "";
+      if (!host) return { ok: false, error: "缺少主持人，或主持人为空" };
+      const playerKeys = Object.keys(bar).filter(k => /^玩家\d+$/.test(k));
+      const knownKeys = ["主持人"].concat(playerKeys);
+      const unknown = Object.keys(bar).filter(k => knownKeys.indexOf(k) < 0);
+      if (unknown.length > 0) return { ok: false, error: "未知的游戏数据栏字段：" + unknown.join("、") };
+      if (playerKeys.length === 0) return { ok: false, error: "缺少 玩家1（至少一名伙伴）" };
+      const nums = playerKeys.map(k => parseInt(k.slice(2), 10)).sort((a, b) => a - b);
+      if (nums[0] !== 1) return { ok: false, error: "玩家编号应从 玩家1 开始" };
+      for (let i = 1; i < nums.length; i++) {
+        if (nums[i] !== nums[i - 1] + 1) return { ok: false, error: "玩家编号断裂：缺少 玩家" + (nums[i - 1] + 1) };
+      }
+      const names = [host];
+      const peers = [];
+      for (let i = 0; i < nums.length; i++) {
+        const name = String(bar["玩家" + nums[i]]).trim();
+        if (!name) return { ok: false, error: "玩家" + nums[i] + " 姓名为空" };
+        if (names.indexOf(name) >= 0) return { ok: false, error: "重复姓名：" + name };
+        names.push(name);
+        peers.push(name);
+      }
+      if (peers.length > 3) {
+        return { ok: true, cast: { host: host, peers: peers.slice(0, 3) }, warning: "界面最多 3 名伙伴，已忽略多余的 " + (peers.length - 3) + " 名" };
+      }
+      return { ok: true, cast: { host: host, peers: peers } };
+    }
+
+    // 启动加载：酒馆消息 -> <Puzzle> -> 名单应用或回退默认；汤面汤底本轮使用固定题目
+    async function loadPuzzleFromContext() {
+      const outcome = { source: "no-input", cast: null, error: null, warning: null };
+      let found = null;
+      if (TavernAdapter.capabilities && TavernAdapter.capabilities.messages) {
+        try {
+          const messages = await TavernAdapter.getChatMessages("0-{{lastMessageId}}");
+          if (Array.isArray(messages)) found = findPuzzleInMessages(messages);
+        } catch (e) {
+          found = null;
+        }
+      }
+      if (found && found.error) {
+        outcome.source = "invalid";
+        outcome.error = found.error;
+      } else if (found && typeof found.yaml === "string") {
+        let verdict = null;
+        try {
+          verdict = validateCast(parsePuzzleYaml(found.yaml));
+        } catch (e) {
+          verdict = { ok: false, error: "YAML 解析失败：" + (e && e.message ? e.message : "未知错误") };
+        }
+        if (verdict.ok) {
+          outcome.source = "puzzle";
+          outcome.cast = verdict.cast;
+          outcome.warning = verdict.warning || null;
+        } else {
+          outcome.source = "invalid";
+          outcome.error = verdict.error;
+        }
+      }
+      GameState.puzzleInput = outcome;
+      if (outcome.cast) dispatch({ type: GameAction.APPLY_CAST, cast: outcome.cast });
+      renderDiagnosis();
     }
 
     function hostModeName() {
@@ -2698,9 +2847,16 @@
     function renderDiagnosis() {
       const caps = TavernAdapter.capabilities || {};
       const mark = ok => ok ? "✓" : "✗";
+      const input = GameState.puzzleInput;
+      let inputText = "谜题输入：未检测";
+      if (input) {
+        if (input.source === "puzzle") inputText = "谜题输入：<Puzzle> 名单已应用" + (input.warning ? "（" + input.warning + "）" : "");
+        else if (input.source === "invalid") inputText = "谜题输入错误：" + input.error + "，已回退默认名单";
+        else inputText = "谜题输入：未找到 <Puzzle>，使用默认名单";
+      }
       const text = "酒馆接口：变量" + mark(caps.variables) + " · 消息" + mark(caps.messages) +
         " · 生成" + mark(caps.generation) + " · 事件" + mark(caps.events) + " · 停止" + mark(caps.stop) +
-        "；主持人模式：" + hostModeName();
+        "；主持人模式：" + hostModeName() + "；" + inputText;
       const el = document.getElementById("env-diagnosis");
       if (el) el.textContent = text;
       const badge = document.querySelector(".meta-badge");

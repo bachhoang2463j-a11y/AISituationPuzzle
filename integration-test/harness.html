@@ -127,13 +127,14 @@
       "};"
     ].join('\n');
 
-    // 完整酒馆助手接口（generateRaw 可编程响应，参数被记录供断言检查）
+    // 完整酒馆助手接口（generateRaw / getChatMessages 可编程响应，参数被记录供断言检查）
     const TAVERN_BRIDGE = [
       "window.getVariables = function(){ window.__tavernMock.calls.getVariables++; return {}; };",
       "window.replaceVariables = function(){ return true; };",
       "window.insertOrAssignVariables = function(){ return true; };",
       "window.getCurrentMessageId = function(){ return 0; };",
-      "window.getChatMessages = function(){ return []; };",
+      "window.__tavernMock.chatMessages = [];",
+      "window.getChatMessages = function(){ return window.__tavernMock.chatMessages; };",
       "window.generateRaw = async function(opts) {",
       "  window.__tavernMock.calls.generateRaw++;",
       "  window.__tavernMock.generateRawCalls.push(opts);",
@@ -161,11 +162,17 @@
     }
 
     // tavern 选项：'none'（默认，无酒馆接口）/ 'full'（完整接口）/ 'partial'（仅变量接口）
+    // chatMessages 选项：full 模式下预设酒馆消息（产物启动加载 <Puzzle> 时即可读到，走真实启动链路）
     async function mountApp(opts) {
       opts = opts || {};
       productHtml = await fetchText('../TurtleSoup.html');
       let bridge = BASE_BRIDGE;
-      if (opts.tavern === 'full') bridge = bridge + '\n' + TAVERN_BRIDGE;
+      if (opts.tavern === 'full') {
+        bridge = bridge + '\n' + TAVERN_BRIDGE;
+        if (opts.chatMessages) {
+          bridge = bridge + '\nwindow.__tavernMock.chatMessages = ' + JSON.stringify(opts.chatMessages) + ';';
+        }
+      }
       else if (opts.tavern === 'partial') bridge = bridge + '\n' + TAVERN_PARTIAL_BRIDGE;
       // 注意：'<' + '/script>' 拆写，避免 HTML 解析器把这里的字符串字面量当成 harness 自身 script 块的闭合标签
       const injected = productHtml.replace(
@@ -177,7 +184,7 @@
         frame.onload = resolve;
         frame.srcdoc = injected;
       });
-      await sleep(400); // 等待 DOMContentLoaded 与初始渲染完成
+      await sleep(400); // 等待 DOMContentLoaded、初始渲染与启动 <Puzzle> 加载完成
     }
 
     function frame() { return document.getElementById('app-frame'); }
@@ -569,6 +576,77 @@
       assert(text.includes('生成✓') && text.includes('变量✓'), '诊断应显示能力可用标记: ' + text);
       assert(text.includes('酒馆助手'), '诊断应显示主持人模式: ' + text);
       win().closeSettingsModal();
+    });
+
+    // ================= 组 5：Puzzle 输入与角色名单（第 5 轮验收） =================
+    const t5 = group('第 5 轮 · Puzzle 输入与角色名单');
+
+    function seatName(charId) {
+      const seat = doc().getElementById('seat-' + charId);
+      return seat ? seat.querySelector('.char-name').textContent : '';
+    }
+    function diagnosisText() {
+      win().openSettingsModal();
+      const text = doc().getElementById('env-diagnosis').textContent;
+      win().closeSettingsModal();
+      return text;
+    }
+    function puzzleMessage(yamlText) {
+      return [{ message_id: 1, message: '<Puzzle>\n' + yamlText.trim() + '\n</Puzzle>' }];
+    }
+
+    t5('合法 <Puzzle>（夹具）：座位名单应用、记录清空、汤面栏显示', async () => {
+      const fixtureYaml = await fetchText('./fixtures/puzzle.yaml');
+      await mountApp({ tavern: 'full', chatMessages: puzzleMessage(fixtureYaml) });
+      assert(seatName('host') === '埃利奥特', '主持人座位名应更新，实际 ' + seatName('host'));
+      assert(seatName('ai-1') === '玛德琳' && seatName('ai-2') === '弗兰克' && seatName('ai-3') === '朵拉', '伙伴座位名应更新');
+      assert(recordCount() === 0, '新局记录应清空，实际 ' + recordCount());
+      assert(doc().getElementById('record-counter').textContent.includes('0'), '计数器应为 0 条');
+      assert(doc().getElementById('soup-brief-text').textContent.trim().length > 0, '汤面栏应显示汤面');
+    });
+    t5('合法名单后主持人请求可见汤底，公共 DOM 无汤底', async () => {
+      win().__tavernMock.generateRawResponder = () =>
+        Promise.resolve('{"verdict":"yes","text":"是的，与海难有关。"}');
+      const base = recordCount();
+      await sendQuestion('名单生效后：男子的过去与大海有关吗？');
+      await waitForRecords(base + 2, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 1, 'generateRaw 应被调用 1 次');
+      const systemMsg = win().__tavernMock.generateRawCalls[0].ordered_prompts[0].content;
+      assert(systemMsg.includes('<TURTLE_SECRET>') && systemMsg.includes(SECRET_MARK), '主持人请求应含汤底');
+      const publicText = [...doc().querySelectorAll('.item-text, .bubble-content')].map(el => el.textContent).join('\n');
+      assert(!publicText.includes(SECRET_MARK), '公共 DOM 不应出现汤底');
+    });
+    t5('缺号名单（玩家1+玩家3）：诊断报错并回退默认名单', async () => {
+      await mountApp({ tavern: 'full', chatMessages: puzzleMessage(
+        '游戏数据栏:\n  主持人: "甲"\n  玩家1: "乙"\n  玩家3: "丙"'
+      )});
+      const text = diagnosisText();
+      assert(text.includes('谜题输入错误') && text.includes('玩家2'), '诊断应显示编号断裂错误: ' + text);
+      assert(seatName('host') === '赫尔墨斯', '应保持默认主持人名，实际 ' + seatName('host'));
+      assert(recordCount() === 6, '默认名单应保留 demo 记录，实际 ' + recordCount());
+    });
+    t5('重名名单：诊断报错并回退默认名单', async () => {
+      await mountApp({ tavern: 'full', chatMessages: puzzleMessage(
+        '游戏数据栏:\n  主持人: "甲"\n  玩家1: "甲"'
+      )});
+      const text = diagnosisText();
+      assert(text.includes('重复姓名'), '诊断应显示重名错误: ' + text);
+      assert(seatName('host') === '赫尔墨斯' && recordCount() === 6, '应回退默认名单');
+    });
+    t5('超过 3 名玩家：应用前 3 名并提示警告', async () => {
+      await mountApp({ tavern: 'full', chatMessages: puzzleMessage(
+        '游戏数据栏:\n  主持人: "主持人X"\n  玩家1: "伙伴一"\n  玩家2: "伙伴二"\n  玩家3: "伙伴三"\n  玩家4: "伙伴四"'
+      )});
+      assert(seatName('host') === '主持人X', '主持人应应用: ' + seatName('host'));
+      assert(seatName('ai-3') === '伙伴三', '第 3 名伙伴应应用: ' + seatName('ai-3'));
+      const text = diagnosisText();
+      assert(text.includes('忽略多余') && text.includes('1 名'), '诊断应显示忽略警告: ' + text);
+    });
+    t5('无 <Puzzle> 消息：默认名单启动，页面不白屏', async () => {
+      await mountApp({ tavern: 'full', chatMessages: [{ message_id: 0, message: '只是普通聊天' }] });
+      assert(seatName('host') === '赫尔墨斯' && seatName('ai-1') === '艾文', '应使用默认名单');
+      assert(recordCount() === 6, '默认名单应保留 demo 记录');
+      assert(win().TurtleApp.diagnose().mode === '酒馆助手', '模式不受影响');
     });
 
     // ================= 运行与渲染 =================
