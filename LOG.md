@@ -64,3 +64,11 @@
 - 验收结果：IAB 中 harness 37/37 断言全绿（上轮 32 项零回归；新增：防重复绑定、render 幂等不丢输入、序列化含 phase/turn/records 且不含汤底与 Key、turn 随发送递增、请求进行中重置后迟到响应被丢弃）。
 - HASH：`9e7b854`
 
+## 2026-09-11：完成第 4 轮——TavernAdapter 能力探测与适配层
+
+- 变更行为：`TurtleSoup.html` 新增 `TavernAdapter`（启动时探测变量/消息/生成/事件/停止五项能力，`available` 以生成能力为最低要求；`getChatMessages`/`getVariables`/`generate`/`stop`/`on` 方法统一 Promise/同步差异与错误格式，缺失时抛错由调用方回退，不白屏）；`hostEvaluate` 走 `generateRaw` 的 `ordered_prompts`（system 汤底区块 + user 问题，`should_silence: true` 后台静默生成，不占用酒馆停止按钮），复用与直连相同的 `parseHostAnswer` 校验；主持人适配器升级为三级调度 `pickHostAdapter()`：显式配置 Base URL 时直连优先 > 酒馆助手 > 本地 Mock；设置弹窗新增"运行环境诊断"区块（能力 ✓/✗ 与当前模式），顶部徽章 title 同步；暴露 `window.TurtleApp` 调试接口（`diagnose`/`serializeState`）。harness 将 mock 桥拆分为基础桥与酒馆桥（full/partial 两种注入模式），`mountApp` 参数化，新增第 4 轮断言组 6 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`。
+- 决策原因：按计划第 4 轮把酒馆函数集中到适配层（游戏逻辑不再直接调用 window 下的酒馆函数）；调度优先级定为"显式配置 > 酒馆环境 > 本地演示"，依据 SPEC 2.1.7（独立 API 配置用于覆盖环境默认）——用户在 API 弹窗的显式配置意图应优先于酒馆当前预设。API 形状依据酒馆助手开发文档（`generateRaw` 的 `ordered_prompts`/`generation_id`/`should_silence`、`stopGenerationById`、`eventOn`）。
+- 验收结果：IAB 中 harness 43/43 断言全绿（上轮 37 项零回归；新增：完整接口探测全可用、generateRaw 恰好一次且 system 含汤底/user 含问题/静默生成、直连优先于酒馆、generateRaw 失败可重试、仅变量接口时回退 Mock 不白屏、设置弹窗诊断文本）。真酒馆环境待用户导入确认。
+- HASH：`cde0deb`
+
