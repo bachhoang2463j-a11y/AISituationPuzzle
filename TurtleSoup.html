@@ -2480,13 +2480,28 @@
           }
         }, timeoutMs);
 
+        // 第 7 轮：先由一名 AI 伙伴公开发言（只看公开信息），再由主持人聚合回答本轮全部问题
         try {
-          const answer = await adapter.hostEvaluate(text, {
-            generationId: request.id,
+          const speech = await adapter.peerEvaluate(PEER_ACTOR_ID, {
+            generationId: request.id + "-peer",
             signal: controller ? controller.signal : undefined
           });
-          if (GameState.request !== request) return; // 请求已被重置或停止，丢弃迟到响应
-          dispatch({ type: GameAction.HOST_ANSWERED, answer: answer });
+          if (GameState.request !== request) return; // 回合已被重置或停止
+          dispatch({ type: GameAction.PEER_ANSWERED, speech: speech });
+        } catch (err) {
+          if (GameState.request !== request) return;
+          dispatch({ type: GameAction.PEER_FAILED, error: err }); // 伙伴失败不阻塞主持人阶段
+        }
+
+        if (GameState.request !== request) return;
+        try {
+          const answers = await adapter.hostEvaluate(text, {
+            generationId: request.id + "-host",
+            signal: controller ? controller.signal : undefined,
+            ledger: request.questionIds
+          });
+          if (GameState.request !== request) return; // 回合已被重置或停止，丢弃迟到响应
+          dispatch({ type: GameAction.HOST_ANSWERED, answers: answers });
         } catch (err) {
           if (GameState.request !== request) return;
           dispatch({ type: GameAction.HOST_FAILED, error: err });
@@ -2499,7 +2514,7 @@
       });
     }
 
-    // 停止进行中的主持人请求：本地立即回到可操作状态，并尽力中断底层生成
+    // 停止进行中的回合：本地立即回到可操作状态，并尽力中断底层生成（伙伴与主持人两个阶段各一个生成 ID）
     async function stopHostRequest() {
       const request = GameState.request;
       if (!request) return;
@@ -2508,7 +2523,8 @@
       }
       const adapter = pickHostAdapter();
       if (adapter === TavernAdapter && TavernAdapter.capabilities.stop) {
-        try { await TavernAdapter.stop(request.id); } catch (e) {}
+        try { await TavernAdapter.stop(request.id + "-peer"); } catch (e) {}
+        try { await TavernAdapter.stop(request.id + "-host"); } catch (e) {}
       }
       if (GameState.request === request) {
         dispatch({ type: GameAction.HOST_ABORTED });
@@ -2517,9 +2533,12 @@
 
     // --- 第 3 轮：Action -> Store -> View 单向流程 ---
     const HOST_TIMEOUT_MS = 60000; // 主持人请求超时阈值（测试可经 TurtleApp.debug.hostTimeoutMs 缩短）
+    const PEER_ACTOR_ID = "ai-1";  // 第 7 轮：仅一名 AI 伙伴（ai-1）参与讨论
 
     const GameAction = {
       SUBMIT_QUESTION: "submit-question",
+      PEER_ANSWERED: "peer-answered",
+      PEER_FAILED: "peer-failed",
       HOST_ANSWERED: "host-answered",
       HOST_FAILED: "host-failed",
       HOST_ABORTED: "host-aborted",
@@ -2544,27 +2563,63 @@
             questionId: "q-" + (requestSeq + 1)
           });
           setBubbleState("player", "我", action.text, null);
-          GameState.phase = "host-thinking";
-          GameState.request = { id: "q-" + (++requestSeq), type: "host-evaluate", startedAt: Date.now(), abortRequested: false, timeoutId: null, abortController: null };
+          GameState.phase = "peer-thinking";
+          GameState.request = {
+            id: "q-" + (++requestSeq), type: "round", startedAt: Date.now(), abortRequested: false,
+            timeoutId: null, abortController: null, questionIds: ["q-" + requestSeq]
+          };
           triggerSpeakingFx("player");
           break;
 
-        case GameAction.HOST_ANSWERED: {
-          const verdict = action.answer.verdict;
-          const verdictLabel = action.answer.verdictLabel;
-          const replyText = verdictLabel + " " + action.answer.hostReply;
-          if (GameState.request) clearTimeout(GameState.request.timeoutId);
+        case GameAction.PEER_ANSWERED: {
+          // 伙伴发言固定为提问：入公开记录并加入本轮问题账本
+          const speech = action.speech;
+          const peerQuestionId = "q-" + (++requestSeq);
+          if (GameState.request) GameState.request.questionIds.push(peerQuestionId);
           GameState.records.push({
-            id: Date.now() + 1,
-            speakerId: "host",
-            speakerName: charactersData.host.name,
-            text: replyText,
-            type: "verdict",
-            verdict: verdict,
-            verdictLabel: verdictLabel,
-            questionId: action.answer.questionId
+            id: Date.now() + 4,
+            speakerId: speech.actorId,
+            speakerName: charactersData[speech.actorId] ? charactersData[speech.actorId].name : speech.actorId,
+            text: speech.text,
+            type: "peer_discussion",
+            verdict: null,
+            questionId: peerQuestionId
           });
-          setBubbleState("host", charactersData.host.name, replyText, verdict);
+          setBubbleState(speech.actorId, charactersData[speech.actorId] ? charactersData[speech.actorId].name : speech.actorId, speech.text, null);
+          GameState.phase = "host-thinking";
+          triggerSpeakingFx(speech.actorId);
+          break;
+        }
+
+        case GameAction.PEER_FAILED:
+          GameState.records.push({
+            id: Date.now() + 5,
+            speakerId: "system",
+            speakerName: "系统",
+            text: "伙伴发言失败（" + (action.error && action.error.message ? action.error.message : "未知错误") + "），本轮仅回答玩家问题。",
+            type: "system",
+            verdict: null
+          });
+          GameState.phase = "host-thinking";
+          break;
+
+        case GameAction.HOST_ANSWERED: {
+          // action.answers = [{ questionId, verdict, verdictLabel, hostReply }]，覆盖本轮账本
+          if (GameState.request) clearTimeout(GameState.request.timeoutId);
+          action.answers.forEach(a => {
+            GameState.records.push({
+              id: Date.now() + 1 + GameState.records.length,
+              speakerId: "host",
+              speakerName: charactersData.host.name,
+              text: a.verdictLabel + " " + a.hostReply,
+              type: "verdict",
+              verdict: a.verdict,
+              verdictLabel: a.verdictLabel,
+              questionId: a.questionId
+            });
+          });
+          const primary = action.answers[0]; // 气泡展示首条（玩家问题）的判定
+          setBubbleState("host", charactersData.host.name, primary.verdictLabel + " " + primary.hostReply, primary.verdict);
           GameState.request = null;
           GameState.phase = "awaiting-player";
           triggerSpeakingFx("host");
@@ -2772,15 +2827,26 @@
         return window.eventOn(eventType, listener);
       },
 
-      // 主持人判定：与 DirectApiAdapter / MockAdapter 同接口
+      // 伙伴公开发言：只看公开信息（汤面 + 公开记录 + 人设），与主持人同接口
+      async peerEvaluate(actorId, opts) {
+        opts = opts || {};
+        const prompts = [
+          { role: "system", content: buildPeerSystemPrompt(actorId) },
+          { role: "user", content: buildPeerUserPrompt() }
+        ];
+        const raw = await this.generate(prompts, { generationId: opts.generationId });
+        return parsePeerSpeechV1(raw, actorId);
+      },
+
+      // 主持人聚合判定：与 DirectApiAdapter / MockAdapter 同接口
       async hostEvaluate(questionText, opts) {
         opts = opts || {};
         const prompts = [
           { role: "system", content: buildHostSystemPrompt() },
-          { role: "user", content: buildHostUserPrompt(questionText, opts.generationId) }
+          { role: "user", content: buildHostUserPrompt(opts.ledger) }
         ];
         const raw = await this.generate(prompts, { generationId: opts.generationId });
-        return parseHostAnswerV1(raw, opts.generationId);
+        return parseHostAnswerV2(raw, opts.ledger || []);
       }
     };
 
@@ -2947,18 +3013,25 @@
       }
     };
 
-    // --- MockAdapter：无酒馆接口时的演示裁判，第 4 轮由 TavernAdapter 同接口替换 ---
+    // --- MockAdapter：无酒馆接口时的演示裁判与伙伴，第 4 轮由 TavernAdapter 同接口替换 ---
     const MockAdapter = {
-      hostEvaluate(questionText, opts) {
+      peerEvaluate(actorId, opts) {
         return new Promise(resolve => {
           setTimeout(() => {
-            const result = evaluateByKeywords(questionText);
-            resolve({
-              verdict: result.verdict,
-              verdictLabel: result.verdictLabel,
-              hostReply: result.hostReply,
-              questionId: opts && opts.generationId ? opts.generationId : null
-            });
+            const name = charactersData[actorId] ? charactersData[actorId].name : actorId;
+            resolve({ actorId: actorId, text: "我想问：男子在出事之前是不是船上的船员？" });
+          }, 800);
+        });
+      },
+      hostEvaluate(questionText, opts) {
+        opts = opts || {};
+        const ledger = opts.ledger || [];
+        return new Promise(resolve => {
+          setTimeout(() => {
+            resolve(ledger.map(qId => {
+              const result = evaluateByKeywords(questionText);
+              return { questionId: qId, verdict: result.verdict, verdictLabel: result.verdictLabel, hostReply: result.hostReply };
+            }));
           }, 1200);
         });
       }
@@ -2995,10 +3068,41 @@
     };
 
     const DirectApiAdapter = {
+      peerEvaluate(actorId, opts) {
+        return requestPeerFromApi(actorId, opts);
+      },
       hostEvaluate(questionText, opts) {
         return requestHostFromApi(questionText, opts);
       }
     };
+
+    async function requestPeerFromApi(actorId, opts) {
+      opts = opts || {};
+      const cfg = globalApiConfig;
+      const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
+      const headers = { "Content-Type": "application/json" };
+      if (cfg.apiKey) headers["Authorization"] = "Bearer " + cfg.apiKey;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: headers,
+        signal: opts.signal,
+        body: JSON.stringify({
+          model: cfg.model || "gpt-4o",
+          temperature: cfg.temperature,
+          messages: [
+            { role: "system", content: buildPeerSystemPrompt(actorId) },
+            { role: "user", content: buildPeerUserPrompt() }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+      if (!res.ok) throw new Error("API 返回 HTTP " + res.status);
+      const data = await res.json();
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : "";
+      return parsePeerSpeechV1(String(content || ""), actorId);
+    }
 
     async function requestHostFromApi(questionText, opts) {
       opts = opts || {};
@@ -3016,7 +3120,7 @@
           temperature: cfg.temperature,
           messages: [
             { role: "system", content: buildHostSystemPrompt() },
-            { role: "user", content: buildHostUserPrompt(questionText, opts.generationId) }
+            { role: "user", content: buildHostUserPrompt(opts.ledger) }
           ],
           response_format: { type: "json_object" }
         })
@@ -3025,32 +3129,75 @@
       const data = await res.json();
       const content = data && data.choices && data.choices[0] && data.choices[0].message
         ? data.choices[0].message.content : "";
-      return parseHostAnswerV1(String(content || ""), opts.generationId);
+      return parseHostAnswerV2(String(content || ""), opts.ledger || []);
+    }
+
+    // --- 伙伴提示词：只含公开信息（汤面、公开记录、角色人设），绝不含汤底 ---
+    function buildPeerSystemPrompt(actorId) {
+      const char = charactersData[actorId] || {};
+      return [
+        (char.prompt || "你是玩家的朋友，正在和大家一起推理海龟汤谜题。"),
+        "你只知道汤面和公开讨论，完全不知道汤底，也不要假装知道答案。",
+        "请基于现有线索提出一条有助于解题的简短问题或推理（面向主持人）。",
+        '只输出 JSON 对象：{"protocol":"peer-speech-v1","actor_id":"' + actorId + '","text":"..."}，不要输出任何其他内容。'
+      ].join("\n");
+    }
+
+    function buildPeerUserPrompt() {
+      const lines = ["【汤面】" + GameState.soup.surface, "【公开记录】"];
+      GameState.records.forEach(item => {
+        if (item.type === "question" || item.type === "verdict" || item.type === "peer_discussion") {
+          lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
+        }
+      });
+      return lines.join("\n");
+    }
+
+    function parsePeerSpeechV1(content, expectedActorId) {
+      const start = content.indexOf("{");
+      const end = content.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("伙伴响应不是 JSON");
+      let parsed;
+      try {
+        parsed = JSON.parse(content.slice(start, end + 1));
+      } catch (e) {
+        throw new Error("伙伴响应 JSON 解析失败");
+      }
+      if (parsed.protocol !== "peer-speech-v1") throw new Error("伙伴响应协议不是 peer-speech-v1");
+      if (parsed.actor_id !== expectedActorId) throw new Error("伙伴响应 actor_id 不匹配（期望 " + expectedActorId + "）");
+      const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+      if (!text) throw new Error("伙伴响应 text 为空");
+      return { actorId: parsed.actor_id, text: text };
     }
 
     function buildHostSystemPrompt() {
       return [
-        "你是海龟汤游戏的主持人，掌握完整汤底，只依据汤底判定玩家的问题。",
+        "你是海龟汤游戏的主持人，掌握完整汤底，只依据汤底判定本轮所有问题。",
         "<TURTLE_SECRET>汤底：" + GameState.secret.truth + "</TURTLE_SECRET>",
         "判定规则：verdict 只能是 yes（问题方向正确）、critical_yes（触及核心真相）、no（与汤底不符）、irrelevant（与解题无关）。",
-        "answer 是面向玩家的一句简短中文回应，可以补充引导，但绝不要透露或暗示汤底内容本身。",
-        "只输出 host-answer-v1 协议的 JSON 对象：{\"protocol\":\"host-answer-v1\",\"question_id\":\"<本次问题ID>\",\"verdict\":\"yes|no|irrelevant|critical_yes\",\"answer\":\"...\"}，question_id 必须原样使用玩家消息中给出的问题 ID，不要输出任何其他内容。"
+        "answer 是面向提问者的一句简短中文回应，可以补充引导，但绝不要透露或暗示汤底内容本身。",
+        "玩家消息的【本轮问题】列出了全部待回答问题，每个问题各有一条判定。",
+        '只输出 host-answer-v2 协议的 JSON 对象：{"protocol":"host-answer-v2","answers":[{"question_id":"<问题ID>","verdict":"yes|no|irrelevant|critical_yes","answer":"..."}]}，answers 必须覆盖每个问题恰好一次，不要输出任何其他内容。'
       ].join("\n");
     }
 
-    function buildHostUserPrompt(questionText, questionId) {
-      const lines = ["【问题ID】" + (questionId || ""), "【汤面】" + GameState.soup.surface, "【公开记录】"];
-      GameState.records.slice(0, -1).forEach(item => {
-        if (item.type === "question" || item.type === "verdict") {
+    function buildHostUserPrompt(ledger) {
+      const lines = ["【汤面】" + GameState.soup.surface, "【公开记录】"];
+      GameState.records.forEach(item => {
+        if (item.type === "question" || item.type === "verdict" || item.type === "peer_discussion") {
           lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
         }
       });
-      lines.push("【玩家提问】" + questionText);
+      lines.push("【本轮问题】");
+      (ledger || []).forEach(qId => {
+        const rec = GameState.records.filter(r => r.questionId === qId)[0];
+        if (rec) lines.push(qId + "（" + rec.speakerName + "）：" + rec.text);
+      });
       return lines.join("\n");
     }
 
-    // host-answer-v1 严格校验：协议、question_id、verdict 值域、answer 非空；任何不符整条拒绝
-    function parseHostAnswerV1(content, expectedQuestionId) {
+    // host-answer-v2 严格校验：协议、账本集合完全覆盖（不漏、不重、无未知 ID）、verdict 值域、answer 非空
+    function parseHostAnswerV2(content, ledger) {
       const start = content.indexOf("{");
       const end = content.lastIndexOf("}");
       if (start < 0 || end <= start) throw new Error("响应不是 JSON");
@@ -3060,18 +3207,27 @@
       } catch (e) {
         throw new Error("响应 JSON 解析失败");
       }
-      if (parsed.protocol !== "host-answer-v1") {
-        throw new Error("响应协议不是 host-answer-v1");
+      if (parsed.protocol !== "host-answer-v2") throw new Error("响应协议不是 host-answer-v2");
+      const answers = Array.isArray(parsed.answers) ? parsed.answers : null;
+      if (!answers || answers.length !== ledger.length) {
+        throw new Error("answers 数量与账本不符（期望 " + ledger.length + " 条，收到 " + (answers ? answers.length : 0) + " 条）");
       }
-      if (!expectedQuestionId || parsed.question_id !== expectedQuestionId) {
-        throw new Error("响应 question_id 不匹配（期望 " + expectedQuestionId + "，收到 " + parsed.question_id + "）");
-      }
-      const verdict = parsed.verdict;
-      const answer = typeof parsed.answer === "string" ? parsed.answer.trim() : "";
-      if (!VERDICT_LABELS[verdict] || !answer) {
-        throw new Error("响应字段非法（verdict: " + verdict + "）");
-      }
-      return { verdict: verdict, verdictLabel: VERDICT_LABELS[verdict], hostReply: answer, questionId: parsed.question_id };
+      const seen = {};
+      const results = answers.map(a => {
+        const verdict = a.verdict;
+        const answerText = typeof a.answer === "string" ? a.answer.trim() : "";
+        if (!VERDICT_LABELS[verdict] || !answerText) {
+          throw new Error("响应字段非法（verdict: " + verdict + "）");
+        }
+        if (ledger.indexOf(a.question_id) < 0) throw new Error("响应含未知 question_id: " + a.question_id);
+        if (seen[a.question_id]) throw new Error("响应重复回答 question_id: " + a.question_id);
+        seen[a.question_id] = true;
+        return { questionId: a.question_id, verdict: verdict, verdictLabel: VERDICT_LABELS[verdict], hostReply: answerText };
+      });
+      ledger.forEach(qId => {
+        if (!seen[qId]) throw new Error("响应遗漏 question_id: " + qId);
+      });
+      return results;
     }
 
     // --- AI 人设模态弹窗逻辑 (含角色专属 API 配置) ---

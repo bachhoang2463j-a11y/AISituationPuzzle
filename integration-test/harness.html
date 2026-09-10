@@ -308,8 +308,8 @@
     });
     t2('Mock 延迟后主持人回答出现且判定合法', async () => {
       const before = recordCount();
-      await waitForRecords(before + 1, 30000); // IAB 对不聚焦页面的 timer 有节流，用轮询而非固定睡眠
-      assert(recordCount() === before + 1, '主持人回答未出现（记录未 +1）');
+      await waitForRecords(before + 3, 30000); // 伙伴发言 + 两条判定（IAB timer 节流下用轮询等待）
+      assert(recordCount() === before + 3, '完整回合记录未出现（+' + (recordCount() - before) + '）');
       const last = lastRecord();
       assert(last.classList.contains('is-verdict'), '主持人记录应为判定样式');
       const tag = last.querySelector('.item-verdict-tag');
@@ -332,19 +332,21 @@
       input.value = '餐厅的汤里有毒吗？';
       input.dispatchEvent(new (win().KeyboardEvent)('keydown', { key: 'Enter', bubbles: true }));
       assert(recordCount() === base + 1, 'Enter 发送未生效');
-      await waitForRecords(base + 2, 30000); // 等本轮回合完成，避免影响后续断言
-      assert(recordCount() === base + 2, 'Enter 回合的主持人回答未出现');
+      await waitForRecords(base + 4, 30000); // 等本轮回合完成，避免影响后续断言
+      assert(recordCount() === base + 4, 'Enter 回合的完整记录未出现');
     });
-    t2('请求进行中重复发送不产生两次回答', async () => {
+    t2('请求进行中重复点击不产生两次回答（第 6 轮起为停止语义）', async () => {
       const base = recordCount();
       const input = doc().getElementById('player-input');
       input.value = '男子认识餐厅老板吗？';
       doc().getElementById('btn-send').click();          // 第一次发送（请求进行中）
       await sleep(200);
       input.value = '天气和这件事有关吗？';
-      doc().getElementById('btn-send').click();          // 请求进行中的第二次发送，应被拒绝
+      doc().getElementById('btn-send').click();          // 请求进行中的第二次点击 = 停止本回合
       await waitForRecords(base + 2, 30000);
-      assert(recordCount() === base + 2, '应只产生 1 问 1 答（+' + (recordCount() - base) + '）');
+      assert(recordCount() === base + 2, '应只有玩家记录与停止记录（+' + (recordCount() - base) + '）');
+      await sleep(1500); // 确认迟到的伙伴/主持人响应被丢弃，不自动产生第二个回答
+      assert(recordCount() === base + 2, '停止后不应自动追加回答（+' + (recordCount() - base) + '）');
     });
     t2('重置后恢复初始 demo 状态', async () => {
       win().clearDialogueHistory(); // confirm 已被 mock 桥放行
@@ -363,22 +365,38 @@
       return Promise.resolve(new (win().Response)(body, { status: 200, headers: { 'Content-Type': 'application/json' } }));
     }
     function setLlmResponder(fn) { win().__fetchMock.responder = fn; }
-    // host-answer-v1 便捷 responder：从请求参数中提取真实 question_id，保证响应可被严格校验接受
-    function v1Json(questionId, verdict, answer) {
-      return JSON.stringify({ protocol: 'host-answer-v1', question_id: questionId, verdict: verdict, answer: answer });
+    // host-answer-v2 / peer-speech-v1 智能 responder：按请求的 system 提示词区分 peer 与 host，账本 ID 从 user 提示词动态提取
+    function extractLedger(promptText) {
+      const out = [];
+      const re = /(q-\d+)（([^）]+)）：(.+)/g;
+      let m;
+      while ((m = re.exec(promptText))) out.push({ id: m[1], actor: m[2], text: m[3] });
+      return out;
     }
-    function extractQid(text) {
-      const m = /【问题ID】(q-\d+)/.exec(text);
-      return m ? m[1] : null;
+    function peerSpeechJson(text) {
+      return JSON.stringify({ protocol: 'peer-speech-v1', actor_id: 'ai-1', text: text });
     }
-    function directV1Responder(verdict, answer) {
+    function v2AnswerJson(ledger, verdict, answer) {
+      return JSON.stringify({
+        protocol: 'host-answer-v2',
+        answers: ledger.map(q => ({ question_id: q.id, verdict: verdict, answer: answer }))
+      });
+    }
+    // Direct 模式：peer 与 host 都请求同一 /chat/completions，按 body 的 system 内容区分
+    function smartDirectResponder(peerText, verdict, answer) {
       return call => {
         const body = JSON.parse(call.opts.body);
-        return mockLlmResponse(v1Json(extractQid(body.messages[1].content), verdict, answer));
+        const sys = body.messages[0].content;
+        if (sys.includes('peer-speech-v1')) return mockLlmResponse(peerSpeechJson(peerText));
+        return mockLlmResponse(v2AnswerJson(extractLedger(body.messages[1].content), verdict, answer));
       };
     }
-    function tavernV1Responder(verdict, answer) {
-      return opts => Promise.resolve(v1Json(extractQid(opts.ordered_prompts[1].content), verdict, answer));
+    function smartTavernResponder(peerText, verdict, answer) {
+      return opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson(peerText));
+        return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), verdict, answer));
+      };
     }
     function configureApiViaUi(baseUrl, key, model) {
       win().openGlobalApiModal();
@@ -393,16 +411,16 @@
       doc().getElementById('btn-send').click();
     }
 
-    t2a('配置 API 后发送：直连请求且仅发出一次（URL/方法/鉴权/模型）', async () => {
+    t2a('配置 API 后发送：伙伴与主持人各一次直连请求（URL/方法/鉴权/模型）', async () => {
       configureApiViaUi('https://mock-llm.example.com/v1', 'sk-test-12345', 'mock-model-x');
       win().__fetchMock.calls = [];
-      setLlmResponder(directV1Responder('yes', '是的，他的经历确实与海难有关。'));
+      setLlmResponder(smartDirectResponder('我想问：男子上过船吗？', 'yes', '是的，他的经历确实与海难有关。'));
 
       const base = recordCount();
       await sendQuestion('男子的遭遇和海难有关吗？');
-      await waitForRecords(base + 2);
+      await waitForRecords(base + 4); // 玩家问题 + 伙伴发言 + 两条判定
 
-      assert(win().__fetchMock.calls.length === 1, '应恰好发出 1 次请求，实际 ' + win().__fetchMock.calls.length);
+      assert(win().__fetchMock.calls.length === 2, '应恰好发出伙伴与主持人共 2 次请求，实际 ' + win().__fetchMock.calls.length);
       const call = win().__fetchMock.calls[0];
       assert(call.url === 'https://mock-llm.example.com/v1/chat/completions', '请求 URL 不符: ' + call.url);
       assert(call.opts.method === 'POST', '请求方法应为 POST');
@@ -412,7 +430,7 @@
       assert(body.messages[1].content.includes('男子的遭遇和海难有关吗？'), '请求体未包含玩家问题');
     });
     t2a('主持人请求的 system 消息包含汤底高注意区块', async () => {
-      const body = JSON.parse(win().__fetchMock.calls[0].opts.body);
+      const body = JSON.parse(win().__fetchMock.calls[1].opts.body); // 第 2 次请求是主持人
       const systemMsg = body.messages[0].content;
       assert(body.messages[0].role === 'system', '首条消息应为 system');
       assert(systemMsg.includes('<TURTLE_SECRET>'), 'system 消息缺少 TURTLE_SECRET 区块');
@@ -435,10 +453,10 @@
       assert(!bodyStr.includes('sk-test-12345'), 'API Key 泄露进请求体');
     });
     t2a('critical_yes 判定显示【是，且至关重要】', async () => {
-      setLlmResponder(directV1Responder('critical_yes', '你触及了当年海难中最关键的真相。'));
+      setLlmResponder(smartDirectResponder('我想问：他失明了吗？', 'critical_yes', '你触及了当年海难中最关键的真相。'));
       const base = recordCount();
       await sendQuestion('当年是不是有人用自己身体的一部分救了他？');
-      await waitForRecords(base + 2);
+      await waitForRecords(base + 4);
       const last = lastRecord();
       assert(last.querySelector('.item-verdict-tag').textContent.includes('至关重要'), 'critical_yes 标签未显示: ' + last.querySelector('.item-verdict-tag').textContent);
     });
@@ -446,27 +464,27 @@
       setLlmResponder(() => Promise.resolve(new (win().Response)('{"error":"boom"}', { status: 500 })));
       const base = recordCount();
       await sendQuestion('另一个会被拒绝的问题？');
-      // 玩家记录与系统错误记录都到位后再检查（玩家记录是同步入列的，必须等满 base+2）
-      await waitForRecords(base + 2, 30000);
+      // 伙伴阶段与主持人阶段先后失败：玩家问题 + 伙伴失败记录 + 主持人失败记录
+      await waitForRecords(base + 3, 30000);
       const last = lastRecord();
       assert(last.querySelector('.item-speaker').textContent.includes('系统'), '失败应产生系统错误记录');
       assert(last.querySelector('.item-text').textContent.includes('请求失败'), '错误记录文本不符');
 
       // 直接重试（换回 200 响应）
-      setLlmResponder(directV1Responder('no', '否，与此无关。'));
+      setLlmResponder(smartDirectResponder('我想问：男子认识厨师吗？', 'no', '否，与此无关。'));
       await sendQuestion('重试的问题：男子是厨师吗？');
-      await waitForRecords(base + 4, 30000); // 错误回合 2 条 + 重试 1 问 1 答
+      await waitForRecords(base + 7, 30000); // 失败回合 3 条 + 重试完整回合 4 条
       assert(lastRecord().classList.contains('is-verdict'), '重试后应成功产生判定记录');
     });
     t2a('清空 API 配置后回退 Mock 闭环（fetch 不再被调用）', async () => {
-      setLlmResponder(directV1Responder('yes', '不应被调用'));
+      setLlmResponder(smartDirectResponder('不应被调用', 'yes', '不应被调用'));
       configureApiViaUi('', 'sk-test-12345', 'mock-model-x'); // 清空 Base URL
       const callsBefore = win().__fetchMock.calls.length;
 
       const base = recordCount();
       await sendQuestion('回退测试：男子喜欢喝汤吗？');
-      await waitForRecords(base + 2, 30000); // Mock 裁判 1200ms 延迟，且 IAB timer 可能被节流，轮询等待
-      assert(recordCount() === base + 2, 'Mock 闭环应产生 1 问 1 答（+' + (recordCount() - base) + '）');
+      await waitForRecords(base + 4, 30000); // Mock 模式同样有伙伴阶段，完整回合 4 条记录
+      assert(recordCount() === base + 4, 'Mock 闭环应产生完整回合（+' + (recordCount() - base) + '）');
       assert(win().__fetchMock.calls.length === callsBefore, '清空配置后不应再发出直连请求');
     });
 
@@ -478,8 +496,8 @@
       win().bindInputEvents();      // 第二次绑定应被防护
       const base = recordCount();
       await sendQuestion('重复绑定测试：男子会做饭吗？');
-      await waitForRecords(base + 2, 30000);
-      assert(recordCount() === base + 2, '应恰好 1 问 1 答（+' + (recordCount() - base) + '）');
+      await waitForRecords(base + 4, 30000);
+      assert(recordCount() === base + 4, '应恰好一轮完整回合（+' + (recordCount() - base) + '）');
     });
     t3('render() 幂等：不重复追加记录、不丢失输入内容', async () => {
       const input = doc().getElementById('player-input');
@@ -506,7 +524,7 @@
       const before = JSON.parse(win().serializeState()).turn;
       const base = recordCount();
       await sendQuestion('回合计数测试：汤是热的吗？');
-      await waitForRecords(base + 2, 30000);
+      await waitForRecords(base + 4, 30000);
       const after = JSON.parse(win().serializeState()).turn;
       assert(after === before + 1, 'turn 应 +1（' + before + ' -> ' + after + '）');
     });
@@ -532,16 +550,16 @@
       });
       assert(d.mode === '酒馆助手', '未配置 API 时模式应为酒馆助手，实际 ' + d.mode);
     });
-    t4('Tavern 模式主持人判定：generateRaw 恰好一次，system 含汤底、user 含问题且静默', async () => {
+    t4('Tavern 模式完整回合：伙伴与主持人各一次 generateRaw，主持人 system 含汤底且静默', async () => {
       await mountApp({ tavern: 'full' });
-      win().__tavernMock.generateRawResponder = tavernV1Responder('yes', '是的，与他的海难经历有关。');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：男子出过海吗？', 'yes', '是的，与他的海难经历有关。');
       const base = recordCount();
       await sendQuestion('海龟汤测试：男子的过去与大海有关吗？');
-      await waitForRecords(base + 2, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 1, 'generateRaw 应恰好调用 1 次，实际 ' + win().__tavernMock.calls.generateRaw);
-      const callOpts = win().__tavernMock.generateRawCalls[0];
-      assert(callOpts.should_silence === true, '生成应为静默（不占用酒馆停止按钮）');
-      const prompts = callOpts.ordered_prompts;
+      await waitForRecords(base + 4, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 2, 'generateRaw 应恰好调用 2 次（伙伴+主持人），实际 ' + win().__tavernMock.calls.generateRaw);
+      const hostCall = win().__tavernMock.generateRawCalls[1]; // 第 2 次调用是主持人
+      assert(hostCall.should_silence === true, '生成应为静默（不占用酒馆停止按钮）');
+      const prompts = hostCall.ordered_prompts;
       assert(prompts[0].role === 'system' && prompts[0].content.includes('<TURTLE_SECRET>') && prompts[0].content.includes(SECRET_MARK), 'system 提示词应含汤底高注意区块');
       assert(prompts[1].role === 'user' && prompts[1].content.includes('男子的过去与大海有关吗？'), 'user 提示词应含玩家问题');
       const last = lastRecord();
@@ -550,11 +568,11 @@
     t4('调度优先级：显式配置 API 时直连优先于酒馆助手', async () => {
       await mountApp({ tavern: 'full' });
       configureApiViaUi('https://mock-llm.example.com/v1', 'sk-test-4', 'mock-model-x');
-      setLlmResponder(directV1Responder('no', '否，与毒药无关。'));
+      setLlmResponder(smartDirectResponder('我想问：汤是凉的吗？', 'no', '否，与毒药无关。'));
       const base = recordCount();
       await sendQuestion('优先级测试：汤里有毒吗？');
-      await waitForRecords(base + 2, 30000);
-      assert(win().__fetchMock.calls.length === 1, '应走直连 fetch（实际 ' + win().__fetchMock.calls.length + ' 次）');
+      await waitForRecords(base + 4, 30000);
+      assert(win().__fetchMock.calls.length === 2, '应走直连 fetch 两次（伙伴+主持人，实际 ' + win().__fetchMock.calls.length + ' 次）');
       assert(win().__tavernMock.calls.generateRaw === 0, '不应调用 generateRaw');
     });
     t4('generateRaw 失败：显示可操作错误且可直接重试成功', async () => {
@@ -562,14 +580,14 @@
       win().__tavernMock.generateRawResponder = () => Promise.reject(new Error('酒馆生成失败'));
       const base = recordCount();
       await sendQuestion('失败测试：酒馆会拒绝吗？');
-      await waitForRecords(base + 2, 30000);
+      await waitForRecords(base + 3, 30000); // 玩家 + 伙伴失败 + 主持人失败
       const last = lastRecord();
       assert(last.querySelector('.item-speaker').textContent.includes('系统'), '失败应产生系统错误记录');
       assert(last.querySelector('.item-text').textContent.includes('酒馆生成失败'), '错误信息未透出');
 
-      win().__tavernMock.generateRawResponder = tavernV1Responder('irrelevant', '与此无关。');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：餐厅在海边吗？', 'irrelevant', '与此无关。');
       await sendQuestion('重试测试：再问一次？');
-      await waitForRecords(base + 4, 30000);
+      await waitForRecords(base + 7, 30000); // 失败回合 3 条 + 重试完整回合 4 条
       assert(lastRecord().classList.contains('is-verdict'), '重试应成功产生判定记录');
     });
     t4('部分能力缺失（仅变量接口）：整体回退 Mock 闭环，不白屏', async () => {
@@ -580,8 +598,8 @@
       assert(d.mode === '本地演示', '模式应为本地演示，实际 ' + d.mode);
       const base = recordCount();
       await sendQuestion('降级测试：还能玩吗？');
-      await waitForRecords(base + 2, 30000);
-      assert(recordCount() === base + 2, 'Mock 闭环应完整可用（+' + (recordCount() - base) + '）');
+      await waitForRecords(base + 4, 30000);
+      assert(recordCount() === base + 4, 'Mock 闭环应完整可用（+' + (recordCount() - base) + '）');
       assert(win().__tavernMock.calls.generateRaw === 0, '不应调用生成接口');
     });
     t4('诊断 UI：设置弹窗显示能力标记与当前主持人模式', async () => {
@@ -620,12 +638,12 @@
       assert(doc().getElementById('soup-brief-text').textContent.trim().length > 0, '汤面栏应显示汤面');
     });
     t5('合法名单后主持人请求可见汤底，公共 DOM 无汤底', async () => {
-      win().__tavernMock.generateRawResponder = tavernV1Responder('yes', '是的，与海难有关。');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：男子喜欢海吗？', 'yes', '是的，与海难有关。');
       const base = recordCount();
       await sendQuestion('名单生效后：男子的过去与大海有关吗？');
-      await waitForRecords(base + 2, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 1, 'generateRaw 应被调用 1 次');
-      const systemMsg = win().__tavernMock.generateRawCalls[0].ordered_prompts[0].content;
+      await waitForRecords(base + 4, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 2, 'generateRaw 应被调用 2 次（伙伴+主持人）');
+      const systemMsg = win().__tavernMock.generateRawCalls[1].ordered_prompts[0].content;
       assert(systemMsg.includes('<TURTLE_SECRET>') && systemMsg.includes(SECRET_MARK), '主持人请求应含汤底');
       const publicText = [...doc().querySelectorAll('.item-text, .bubble-content')].map(el => el.textContent).join('\n');
       assert(!publicText.includes(SECRET_MARK), '公共 DOM 不应出现汤底');
@@ -664,11 +682,11 @@
     });
 
     // ================= 组 6：真实主持人问答 host-answer-v1（第 6 轮验收） =================
-    const t6 = group('第 6 轮 · 真实主持人问答（host-answer-v1）');
+    const t6 = group('第 6 轮 · 真实主持人问答（host-answer-v2）');
 
     t6('请求进行中发送按钮变停止；停止后回到可操作且可重试', async () => {
       await mountApp({ tavern: 'full' });
-      win().__tavernMock.generateRawResponder = () => new Promise(() => {}); // 永不 resolve
+      win().__tavernMock.generateRawResponder = () => new Promise(() => {}); // 永不 resolve（伙伴阶段即挂起）
       const base = recordCount();
       await sendQuestion('停止测试：这个问题会被停止吗？');
       await sleep(300);
@@ -679,48 +697,60 @@
       assert(recordCount() === base + 2, '应有玩家记录与停止记录（+' + (recordCount() - base) + '）');
       assert(lastRecord().querySelector('.item-speaker').textContent.includes('系统'), '应有停止系统记录');
       assert(btn.querySelector('span').textContent.includes('发言'), '停止后按钮应恢复发送');
-      assert(win().__tavernMock.calls.stopGeneration === 1, '应调用 stopGenerationById 中断酒馆生成');
+      assert(win().__tavernMock.calls.stopGeneration >= 1, '应调用 stopGenerationById 中断酒馆生成');
 
-      win().__tavernMock.generateRawResponder = tavernV1Responder('no', '否，请再想想。');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：男子戴帽子吗？', 'no', '否，请再想想。');
       await sendQuestion('重试：男子戴帽子吗？');
-      await waitForRecords(base + 4, 30000);
+      await waitForRecords(base + 6, 30000);
       assert(lastRecord().classList.contains('is-verdict'), '停止后应可重试成功');
     });
-    t6('v1 响应成功：判定记录与玩家问题共享同一 question_id', async () => {
+    t6('v2 响应成功：判定记录与对应问题共享同一 question_id', async () => {
       await mountApp({ tavern: 'full' });
-      win().__tavernMock.generateRawResponder = tavernV1Responder('critical_yes', '触及了核心真相。');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：他失明了吗？', 'critical_yes', '触及了核心真相。');
       const base = recordCount();
       await sendQuestion('账本测试：有人牺牲了自己救他吗？');
-      await waitForRecords(base + 2, 30000);
+      await waitForRecords(base + 4, 30000); // 玩家问题 + 伙伴发言 + 两条判定
       const state = JSON.parse(win().serializeState());
-      const qRec = state.records[state.records.length - 2];
-      const aRec = state.records[state.records.length - 1];
-      assert(qRec.type === 'question' && aRec.type === 'verdict', '记录顺序错误');
-      assert(/^q-\d+$/.test(qRec.questionId || ''), 'question_id 格式错误: ' + qRec.questionId);
-      assert(qRec.questionId === aRec.questionId, '判定与提问的 question_id 不一致');
+      const tail = state.records.slice(-4);
+      assert(tail[0].type === 'question' && tail[1].type === 'peer_discussion' && tail[2].type === 'verdict' && tail[3].type === 'verdict', '回合记录顺序错误');
+      assert(/^q-\d+$/.test(tail[0].questionId || ''), '玩家 question_id 格式错误');
+      assert(tail[1].questionId && tail[1].questionId !== tail[0].questionId, '伙伴问题应有独立 question_id');
+      assert(tail[2].questionId === tail[0].questionId && tail[3].questionId === tail[1].questionId, '判定与问题 ID 未对齐');
     });
-    t6('question_id 不匹配的响应整条拒绝，可重试', async () => {
+    t6('含未知 question_id 的响应整批拒绝，可重试', async () => {
       await mountApp({ tavern: 'full' });
-      win().__tavernMock.generateRawResponder = () => Promise.resolve(v1Json('q-999', 'yes', '伪造的 ID。'));
+      // 发送前即设置：伙伴正常响应，主持人返回伪造 ID 的 v2 响应（mock 为微任务级，事后替换来不及）
+      win().__tavernMock.generateRawResponder = opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson('我想问：天气如何？'));
+        return Promise.resolve(v2AnswerJson([{ id: 'q-999' }, { id: 'q-998' }], 'yes', '伪造的 ID。'));
+      };
       const base = recordCount();
-      await sendQuestion('ID 校验测试：这次响应带错 ID。');
-      await waitForRecords(base + 2, 30000);
+      await sendQuestion('ID 校验测试：这次 host 响应带未知 ID。');
+      await waitForRecords(base + 3, 30000); // 玩家 + 伙伴发言 + 拒绝错误
       const last = lastRecord();
       assert(last.querySelector('.item-speaker').textContent.includes('系统'), '应产生系统错误记录');
-      assert(last.querySelector('.item-text').textContent.includes('question_id 不匹配'), '错误信息不符');
+      assert(/未知 question_id|数量与账本不符|遗漏/.test(last.querySelector('.item-text').textContent), '错误信息不符: ' + last.querySelector('.item-text').textContent);
 
-      win().__tavernMock.generateRawResponder = tavernV1Responder('yes', '现在 ID 对了。');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：这次对了吗？', 'yes', '现在 ID 对了。');
       await sendQuestion('重试：这次 ID 正确。');
-      await waitForRecords(base + 4, 30000);
+      await waitForRecords(base + 7, 30000);
       assert(lastRecord().classList.contains('is-verdict'), '重试应成功');
     });
-    t6('缺 answer 字段的响应整条拒绝', async () => {
+    t6('缺 answer 字段的响应整批拒绝', async () => {
       await mountApp({ tavern: 'full' });
-      win().__tavernMock.generateRawResponder = opts =>
-        Promise.resolve(JSON.stringify({ protocol: 'host-answer-v1', question_id: extractQid(opts.ordered_prompts[1].content), verdict: 'yes' }));
+      win().__tavernMock.generateRawResponder = opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson('我想问：汤是热的吗？'));
+        const ledger = extractLedger(opts.ordered_prompts[1].content);
+        return Promise.resolve(JSON.stringify({
+          protocol: 'host-answer-v2',
+          answers: ledger.map(q => ({ question_id: q.id, verdict: 'yes' })) // 缺 answer
+        }));
+      };
       const base = recordCount();
       await sendQuestion('缺字段测试：响应没有 answer。');
-      await waitForRecords(base + 2, 30000);
+      await waitForRecords(base + 3, 30000);
       const last = lastRecord();
       assert(last.querySelector('.item-speaker').textContent.includes('系统'), '应拒绝并产生错误记录');
       assert(last.querySelector('.item-text').textContent.includes('响应字段非法'), '错误信息不符: ' + last.querySelector('.item-text').textContent);
@@ -737,10 +767,69 @@
       assert(doc().getElementById('btn-send').querySelector('span').textContent.includes('发言'), '超时后按钮应恢复');
 
       win().TurtleApp.debug.hostTimeoutMs = 800;
-      win().__tavernMock.generateRawResponder = tavernV1Responder('irrelevant', '与此无关。');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：餐厅在海边吗？', 'irrelevant', '与此无关。');
       await sendQuestion('重试：超时后再次提问。');
-      await waitForRecords(base + 4, 30000);
+      await waitForRecords(base + 6, 30000); // 超时回合 2 条 + 重试完整回合 4 条
       assert(lastRecord().classList.contains('is-verdict'), '超时后应可重试成功');
+    });
+
+    // ================= 组 7：单个 AI 伙伴（第 7 轮验收） =================
+    const t7 = group('第 7 轮 · 单个 AI 伙伴');
+
+    t7('完整回合顺序：伙伴先发言、主持人后聚合，伙伴气泡更新', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：男子是水手吗？', 'yes', '方向正确。');
+      const base = recordCount();
+      await sendQuestion('伙伴回合测试：男子的职业与海有关吗？');
+      await waitForRecords(base + 4, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 2, '一次玩家动作应恰好一伙伴一主持人请求');
+      const peerSys = win().__tavernMock.generateRawCalls[0].ordered_prompts[0].content;
+      const hostSys = win().__tavernMock.generateRawCalls[1].ordered_prompts[0].content;
+      assert(peerSys.includes('peer-speech-v1'), '第 1 次请求应是伙伴发言');
+      assert(hostSys.includes('host-answer-v2'), '第 2 次请求应是主持人聚合判定');
+      const state = JSON.parse(win().serializeState());
+      const tail = state.records.slice(-4);
+      assert(tail[0].type === 'question' && tail[1].type === 'peer_discussion' && tail[2].type === 'verdict' && tail[3].type === 'verdict', '回合记录顺序错误');
+      assert(doc().querySelector('#bubble-ai-1 .bubble-content').textContent.includes('男子是水手吗'), '伙伴气泡未更新');
+    });
+    t7('伙伴请求完全隔离：system 与 user 均不含汤底', async () => {
+      // 复用上一次挂载的请求记录
+      const peerCall = win().__tavernMock.generateRawCalls[0];
+      const peerSys = peerCall.ordered_prompts[0].content;
+      const peerUser = peerCall.ordered_prompts[1].content;
+      assert(!peerSys.includes('<TURTLE_SECRET>') && !peerSys.includes(SECRET_MARK), '伙伴 system 提示词泄露汤底');
+      assert(!peerUser.includes(SECRET_MARK), '伙伴 user 提示词泄露汤底');
+      const publicText = [...doc().querySelectorAll('.item-text, .bubble-content')].map(el => el.textContent).join('\n');
+      assert(!publicText.includes(SECRET_MARK), '公共 DOM 泄露汤底');
+    });
+    t7('伙伴失败不阻塞：跳过伙伴后主持人仍回答玩家问题', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('peer-speech-v1')) return Promise.reject(new Error('伙伴请求失败'));
+        return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), 'no', '否，与海难无关。'));
+      };
+      const base = recordCount();
+      await sendQuestion('伙伴失败测试：汤里下了毒吗？');
+      await waitForRecords(base + 3, 30000); // 玩家问题 + 伙伴失败记录 + 玩家判定
+      const state = JSON.parse(win().serializeState());
+      const tail = state.records.slice(-3);
+      assert(tail[0].type === 'question' && tail[1].type === 'system' && tail[2].type === 'verdict', '失败回合记录顺序错误');
+      assert(tail[1].text.includes('伙伴发言失败'), '伙伴失败记录文本不符');
+      assert(tail[2].questionId === tail[0].questionId, '主持人应只回答玩家问题');
+    });
+    t7('停止后回到等待玩家，不会自动开启下一轮', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = () => new Promise(() => {}); // 伙伴阶段即挂起
+      const base = recordCount();
+      await sendQuestion('停止续轮测试：会被停止。');
+      await sleep(300);
+      doc().getElementById('btn-send').click(); // 停止
+      await sleep(2200); // 超过 Mock 伙伴(800ms)与主持人(1200ms)的延迟窗口
+      assert(recordCount() === base + 2, '停止后不应有任何自动追加记录（+' + (recordCount() - base) + '）');
+      const state = JSON.parse(win().serializeState());
+      assert(state.phase === 'awaiting-player', '停止后应回到等待玩家，实际 ' + state.phase);
+      assert(state.request === null, '停止后请求应清空');
     });
 
     // ================= 运行与渲染 =================
