@@ -2089,7 +2089,7 @@
 
   <!-- 核心交互逻辑 -->
   <script>
-    // --- 全局 API 配置对象与本地持久化 ---
+    // --- 全局 API 配置对象（内存；持久化经 Persistence，Key 永不落盘） ---
     let globalApiConfig = {
       baseUrl: "",
       apiKey: "",
@@ -2097,11 +2097,112 @@
       temperature: 0.7
     };
 
-    // 从本地存储读取全局 API 配置
-    const savedGlobalApi = localStorage.getItem("ai_turtle_global_api");
-    if (savedGlobalApi) {
+    // --- 第 12 轮：配置持久化（SPEC 7）---
+    // 酒馆变量优先（extension 存 API 偏好、chat 存 aiTurtleChatProfiles 按姓名索引），无酒馆回退 localStorage；
+    // API Key 永不写入任何持久层；损坏数据降级为默认，不白屏。
+    let chatProfiles = null; // 人设覆盖层 { 姓名: {name, prompt, avatar} }
+    let chatChangedStop = null; // CHAT_CHANGED 订阅句柄（防重复订阅）
+
+    const Persistence = {
+      // 读变量表；不可用或损坏返回 null（调用方回退 localStorage）
+      readVarStore(type) {
+        if (!TavernAdapter.capabilities.variables) return null;
+        try {
+          const v = window.getVariables({ type: type });
+          return (v && typeof v === "object" && !Array.isArray(v)) ? v : null;
+        } catch (e) {
+          return null;
+        }
+      },
+      writeVarStore(type, store) {
+        if (!TavernAdapter.capabilities.variables) return false;
+        try {
+          window.replaceVariables(store, { type: type });
+          return true;
+        } catch (e) {
+          return false;
+        }
+      },
+      setVar(type, key, value) {
+        const store = this.readVarStore(type);
+        if (store === null) return false; // 读取失败时不盲目覆盖整表
+        store[key] = value;
+        return this.writeVarStore(type, store);
+      },
+      saveApiConfig() {
+        const stored = { baseUrl: globalApiConfig.baseUrl, model: globalApiConfig.model, temperature: globalApiConfig.temperature }; // 无 apiKey
+        if (this.setVar("extension", "aiTurtleConfig", stored)) return;
+        try { localStorage.setItem("ai_turtle_global_api", JSON.stringify(stored)); } catch (e) {}
+      },
+      saveChatProfiles(profiles) {
+        if (this.setVar("chat", "aiTurtleChatProfiles", profiles)) return;
+        try { localStorage.setItem("ai_turtle_chat_profiles", JSON.stringify(profiles)); } catch (e) {}
+      }
+    };
+
+    // 启动加载：API 配置（Key 恒空）+ 人设覆盖层；损坏数据降级默认
+    async function loadPersistedConfig() {
+      let saved = null;
+      const extStore = Persistence.readVarStore("extension");
+      if (extStore && extStore.aiTurtleConfig && typeof extStore.aiTurtleConfig === "object") {
+        saved = extStore.aiTurtleConfig;
+      }
+      if (!saved) {
+        try { saved = JSON.parse(localStorage.getItem("ai_turtle_global_api")); } catch (e) { saved = null; }
+      }
+      if (saved && typeof saved === "object") {
+        globalApiConfig.baseUrl = typeof saved.baseUrl === "string" ? saved.baseUrl : "";
+        globalApiConfig.model = (typeof saved.model === "string" && saved.model) ? saved.model : "gpt-4o";
+        globalApiConfig.temperature = typeof saved.temperature === "number" ? saved.temperature : 0.7;
+      }
+      globalApiConfig.apiKey = ""; // Key 永不恢复
+
+      chatProfiles = null;
+      const chatStore = Persistence.readVarStore("chat");
+      if (chatStore && chatStore.aiTurtleChatProfiles && typeof chatStore.aiTurtleChatProfiles === "object") {
+        chatProfiles = chatStore.aiTurtleChatProfiles;
+      }
+      if (!chatProfiles) {
+        try {
+          const p = JSON.parse(localStorage.getItem("ai_turtle_chat_profiles"));
+          if (p && typeof p === "object") chatProfiles = p;
+        } catch (e) { chatProfiles = null; }
+      }
+    }
+
+    // 人设覆盖层按姓名应用到当前角色数据与座位头像
+    function applyChatProfiles() {
+      if (!chatProfiles || typeof chatProfiles !== "object") return;
+      Object.keys(charactersData).forEach(charId => {
+        const p = chatProfiles[charactersData[charId].name];
+        if (p && typeof p === "object") {
+          if (p.prompt) charactersData[charId].prompt = p.prompt;
+          if (p.avatar) charactersData[charId].avatar = p.avatar;
+        }
+      });
+      ["host", "ai-1", "ai-2", "ai-3"].forEach(charId => {
+        const seat = document.getElementById("seat-" + charId);
+        const img = seat && seat.querySelector(".avatar-img");
+        if (img && charactersData[charId] && charactersData[charId].avatar) img.src = charactersData[charId].avatar;
+      });
+    }
+
+    // 聊天切换：放弃进行中请求，清空游戏并按新聊天重建（游戏过程不跨聊天）
+    async function handleChatChanged() {
+      if (GameState.request) {
+        GameState.request.abortRequested = true;
+        clearTimeout(GameState.request.timeoutId);
+      }
+      dispatch({ type: GameAction.RESET_GAME });
+      await loadPersistedConfig(); // chat 作用域人设随聊天切换
+      await loadPuzzleFromContext();
+    }
+
+    function subscribeChatChanged() {
+      if (chatChangedStop) return; // 防重复订阅
+      if (!TavernAdapter.capabilities.events || !window.tavern_events || !window.tavern_events.CHAT_CHANGED) return;
       try {
-        globalApiConfig = { ...globalApiConfig, ...JSON.parse(savedGlobalApi) };
+        chatChangedStop = TavernAdapter.on(window.tavern_events.CHAT_CHANGED, handleChatChanged);
       } catch (e) {}
     }
 
@@ -2282,8 +2383,16 @@
       TavernAdapter.detect();
       render();
       bindInputEvents();
-      loadPuzzleFromContext(); // 异步：完成后应用 <Puzzle> 名单或回退默认，并刷新诊断
+      initLifecycle();
     });
+
+    // 第 12 轮初始化链：恢复配置 -> 应用人设 -> 加载谜题 -> 订阅聊天切换（幂等，重复调用不重复订阅）
+    async function initLifecycle() {
+      await loadPersistedConfig();
+      applyChatProfiles();
+      await loadPuzzleFromContext();
+      subscribeChatChanged();
+    }
 
     // 启动时快照初始 demo 气泡，供重置恢复
     function snapshotInitialBubbles() {
@@ -2345,10 +2454,10 @@
 
       globalApiConfig.baseUrl = url; // 空值表示未配置，发送时回退本地 Mock 裁判
       globalApiConfig.apiKey = key;
-      globalApiConfig.model = model || "gpt-4o";
+      globalApiConfig.model = model;
       globalApiConfig.temperature = temp;
 
-      localStorage.setItem("ai_turtle_global_api", JSON.stringify(globalApiConfig));
+      Persistence.saveApiConfig(); // Key 不落盘
       closeGlobalApiModal();
     }
 
@@ -2977,6 +3086,7 @@
             clearTimeout(GameState.request.timeoutId);
           }
           GameState.records = INITIAL_RECORDS.map(record => ({ ...record }));
+          GameState.notes = INITIAL_NOTES.map(note => ({ ...note })); // 便签墙属游戏过程，重置回到 demo 初始
           GameState.bubbles = {};
           GameState.phase = "awaiting-player";
           GameState.turn = 0;
@@ -3389,7 +3499,10 @@
         }
       }
       GameState.puzzleInput = outcome;
-      if (outcome.cast) dispatch({ type: GameAction.APPLY_CAST, cast: outcome.cast });
+      if (outcome.cast) {
+        dispatch({ type: GameAction.APPLY_CAST, cast: outcome.cast });
+        applyChatProfiles(); // 名单应用后按新姓名回放人设覆盖层
+      }
       renderDiagnosis();
     }
 
@@ -3425,9 +3538,11 @@
       serializeState: serializeState,
       debug: {
         hostTimeoutMs: HOST_TIMEOUT_MS, // 测试钩子：可缩短超时阈值验证超时路径
-        peerRandom: null                 // 测试钩子：注入确定性随机源以控制 50% 抽样
+        peerRandom: null,                // 测试钩子：注入确定性随机源以控制 50% 抽样
+        initLifecycle: null              // 测试钩子：initLifecycle 引用（初始化后填充），验证重复初始化不重复订阅
       }
     };
+    window.TurtleApp.debug.initLifecycle = initLifecycle;
 
     // --- MockAdapter：无酒馆接口时的演示裁判与伙伴，第 4 轮由 TavernAdapter 同接口替换 ---
     const MOCK_PEER_TEXTS = {
@@ -4115,6 +4230,7 @@
       if (!currentEditingCharId || !charactersData[currentEditingCharId]) return;
 
       const char = charactersData[currentEditingCharId];
+      const oldName = char.name; // 改名时迁移人设索引（按姓名索引，SPEC 7.2）
       const nameInput = document.getElementById("modal-input-name").value.trim();
       const promptInput = document.getElementById("modal-input-prompt").value.trim();
       const previewImg = document.getElementById("modal-avatar-img").src;
@@ -4146,6 +4262,12 @@
         if (nameEl) nameEl.textContent = char.name;
         if (avatarImgEl) avatarImgEl.src = char.avatar;
       }
+
+      // 第 12 轮：人设覆盖层按姓名索引持久化（改名迁移旧键）
+      chatProfiles = chatProfiles && typeof chatProfiles === "object" ? chatProfiles : {};
+      if (oldName && oldName !== char.name) delete chatProfiles[oldName];
+      chatProfiles[char.name] = { name: char.name, prompt: char.prompt, avatar: char.avatar };
+      Persistence.saveChatProfiles(chatProfiles);
 
       closePersonaModal();
     }

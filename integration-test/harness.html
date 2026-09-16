@@ -107,7 +107,7 @@
       "window.confirm = function(){ return true; };",
       "window.alert = function(){};",
       "window.__promptQueue = []; window.prompt = function(msg, def){ var v = window.__promptQueue.shift(); return v === undefined ? (def || '') : v; };",
-      "try { localStorage.removeItem('ai_turtle_global_api'); localStorage.removeItem('ai_turtle_avatar_library'); } catch (e) {}",
+      "try { if (!parent.__keepLocalStorage) { localStorage.removeItem('ai_turtle_global_api'); localStorage.removeItem('ai_turtle_chat_profiles'); localStorage.removeItem('ai_turtle_avatar_library'); } } catch (e) {}",
       "window.__tavernMock = { calls: { generateRaw: 0, generate: 0, getVariables: 0, stopGeneration: 0 }, generateRawCalls: [], generateRawResponder: null };",
       "window.__fetchMock = { calls: [], responder: null, trace: [] };",
       "window.__realFetch = window.fetch.bind(window);",
@@ -128,10 +128,10 @@
       "};"
     ].join('\n');
 
-    // 完整酒馆助手接口（generateRaw / getChatMessages 可编程响应，参数被记录供断言检查）
+    // 完整酒馆助手接口（generateRaw / getChatMessages / 变量表 / 事件可编程，参数被记录供断言检查）
     const TAVERN_BRIDGE = [
-      "window.getVariables = function(){ window.__tavernMock.calls.getVariables++; return {}; };",
-      "window.replaceVariables = function(){ return true; };",
+      "window.getVariables = function(opt){ window.__tavernMock.calls.getVariables++; var t = (opt && opt.type) || 'global'; var s = parent.__tavernVars; return (s && s[t] !== undefined) ? s[t] : {}; };",
+      "window.replaceVariables = function(v, opt){ var t = (opt && opt.type) || 'global'; if (!parent.__tavernVars) parent.__tavernVars = {}; parent.__tavernVars[t] = v; window.__tavernMock.replaceCalls = window.__tavernMock.replaceCalls || []; window.__tavernMock.replaceCalls.push({ type: t, value: v }); return v; };",
       "window.insertOrAssignVariables = function(){ return true; };",
       "window.getCurrentMessageId = function(){ return 0; };",
       "window.__tavernMock.chatMessages = [];",
@@ -145,7 +145,7 @@
       "};",
       "window.generate = async function(opts){ window.__tavernMock.calls.generate++; return ''; };",
       "window.stopGenerationById = async function(){ window.__tavernMock.calls.stopGeneration++; return true; };",
-      "window.eventOn = function(){ return { stop: function(){} }; };",
+      "window.eventOn = function(name, fn){ window.__tavernMock.eventSubs = window.__tavernMock.eventSubs || {}; var a = window.__tavernMock.eventSubs[name] = window.__tavernMock.eventSubs[name] || []; a.push(fn); return { stop: function(){ var i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); } }; };",
       "window.tavern_events = { CHAT_CHANGED: 'chat_changed', MESSAGE_RECEIVED: 'message_received' };"
     ].join('\n');
 
@@ -164,9 +164,13 @@
 
     // tavern 选项：'none'（默认，无酒馆接口）/ 'full'（完整接口）/ 'partial'（仅变量接口）
     // chatMessages 选项：full 模式下预设酒馆消息（产物启动加载 <Puzzle> 时即可读到，走真实启动链路）
+    // keepVars 选项：保留 parent.__tavernVars（默认每次挂载重置；持久化断言用它模拟"刷新后变量仍在"）
     async function mountApp(opts) {
       opts = opts || {};
       productHtml = await fetchText('../TurtleSoup.html');
+      window.__tavernVars = opts.keepVars
+        ? (window.__tavernVars || { extension: {}, chat: {} })
+        : { extension: {}, chat: {} };
       let bridge = BASE_BRIDGE;
       if (opts.tavern === 'full') {
         bridge = bridge + '\n' + TAVERN_BRIDGE;
@@ -1284,6 +1288,117 @@
       const state = JSON.parse(win().serializeState());
       const chatReplies = state.records.slice(-4).filter(r => r.type === 'chat' && r.speakerId !== 'player');
       assert(chatReplies.length === 4, '主持人与 3 伙伴都应恰好回应一次，实际 ' + chatReplies.length);
+    });
+
+    // ================= 组 12：配置持久化与事件生命周期（第 12 轮验收） =================
+    const t12 = group('第 12 轮 · 配置持久化与事件生命周期');
+
+    t12('保存 API 配置：写入 extension 变量且不含 Key，localStorage 不再使用', async () => {
+      await mountApp({ tavern: 'full' });
+      configureApiViaUi('https://persist.example.com/v1', 'sk-round12-secret', 'model-p12');
+      const stored = window.__tavernVars.extension.aiTurtleConfig;
+      assert(stored && stored.baseUrl === 'https://persist.example.com/v1', 'extension 变量应保存 baseUrl: ' + JSON.stringify(stored));
+      assert(stored.model === 'model-p12' && stored.temperature === 0.7, '模型与温度应保存');
+      assert(!JSON.stringify(stored).includes('sk-round12-secret'), '存储值不得包含 API Key');
+      assert(!('apiKey' in stored), '存储对象不应有 apiKey 字段');
+      assert(localStorage.getItem('ai_turtle_global_api') === null, '酒馆路径可用时不应回退 localStorage');
+    });
+    t12('重新挂载（模拟刷新）：配置恢复、Key 为空、游戏过程不恢复', async () => {
+      await mountApp({ tavern: 'full', keepVars: true });
+      win().openGlobalApiModal();
+      assert(doc().getElementById('global-api-url').value === 'https://persist.example.com/v1', '刷新后 baseUrl 应恢复');
+      assert(doc().getElementById('global-api-model').value === 'model-p12', '刷新后模型应恢复');
+      assert(doc().getElementById('global-api-key').value === '', 'API Key 永不恢复');
+      win().closeGlobalApiModal();
+      const state = JSON.parse(win().serializeState());
+      assert(state.turn === 0, '游戏回合不跨刷新恢复');
+      assert(recordCount() === 6, '游戏记录应回到初始 demo（不跨刷新恢复）');
+      assert(state.notes.length === 4, '便签墙应回到初始 demo');
+      window.__tavernVars = { extension: {}, chat: {} }; // 清理，避免影响后续断言
+    });
+    t12('人设保存：chat 变量按姓名索引，刷新后恢复', async () => {
+      await mountApp({ tavern: 'full' });
+      win().openPersonaModal('ai-1');
+      doc().getElementById('modal-input-prompt').value = '第 12 轮测试人设：沉稳的推理者。';
+      win().savePersonaModal();
+      const profiles = window.__tavernVars.chat.aiTurtleChatProfiles;
+      assert(profiles && profiles['艾文'] && profiles['艾文'].prompt.includes('第 12 轮测试人设'), 'chat 变量应按姓名索引保存人设');
+
+      await mountApp({ tavern: 'full', keepVars: true });
+      win().openPersonaModal('ai-1');
+      assert(doc().getElementById('modal-input-prompt').value.includes('第 12 轮测试人设'), '刷新后人设应恢复');
+      win().closePersonaModal();
+      window.__tavernVars = { extension: {}, chat: {} };
+    });
+    t12('CHAT_CHANGED：清空游戏（含便签）并按新聊天重建名单', async () => {
+      const fixtureYaml = await fetchText('./fixtures/puzzle.yaml');
+      await mountApp({ tavern: 'full', chatMessages: puzzleMessage(fixtureYaml) });
+      assert(seatName('host') === '埃利奥特', '初始应应用夹具名单');
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：切换前的发言。', 'yes', '判定。');
+      const base = recordCount();
+      await sendQuestion('切换前的一轮：汤是热的吗？');
+      await waitForRecords(base + 4, 30000);
+      await sleep(300);
+      assert(recordCount() > 0 && JSON.parse(win().serializeState()).notes.length >= 4, '应已有游戏过程数据');
+
+      // 模拟切换聊天：换消息 + 触发 CHAT_CHANGED
+      win().__tavernMock.chatMessages = puzzleMessage('游戏数据栏:\n  主持人: "新酒馆老板"\n  玩家1: "新伙伴甲"\n  玩家2: "新伙伴乙"');
+      (win().__tavernMock.eventSubs['chat_changed'] || []).forEach(fn => fn());
+      await sleep(800); // 等待异步重建
+      const state = JSON.parse(win().serializeState());
+      assert(seatName('host') === '新酒馆老板', '应按新聊天重建名单: ' + seatName('host'));
+      assert(seatName('ai-1') === '新伙伴甲' && seatName('ai-2') === '新伙伴乙', '新伙伴名单应应用');
+      assert(recordCount() === 0, '新局记录应清零（不带上一局状态）');
+      assert(state.notes.length === 4, '便签墙应回到初始 demo');
+      assert(state.phase === 'awaiting-player', '应回到等待玩家');
+    });
+    t12('重复初始化不会重复订阅事件', async () => {
+      await mountApp({ tavern: 'full' });
+      const subs = win().__tavernMock.eventSubs['chat_changed'] || [];
+      assert(subs.length === 1, '启动后应恰好 1 个订阅，实际 ' + subs.length);
+      await win().TurtleApp.debug.initLifecycle(); // 模拟重复初始化
+      const subsAfter = win().__tavernMock.eventSubs['chat_changed'] || [];
+      assert(subsAfter.length === 1, '重复初始化不应重复订阅，实际 ' + subsAfter.length);
+    });
+    t12('损坏变量降级为默认配置，不白屏', async () => {
+      localStorage.removeItem('ai_turtle_global_api'); // 清掉更早直连断言的 localStorage 残留，聚焦变量损坏场景
+      await mountApp({ tavern: 'full' }); // 重置变量桶
+      window.__tavernVars.extension.aiTurtleConfig = 'corrupt-not-object';
+      window.__tavernVars.chat.aiTurtleChatProfiles = 42;
+      await mountApp({ tavern: 'full', keepVars: true });
+      await sleep(500); // 等 initLifecycle 完成
+      assert(win().__appErrors.length === 0, '不应产生未处理错误');
+      win().openGlobalApiModal();
+      assert(doc().getElementById('global-api-url').value === '', '损坏配置应降级为空 baseUrl');
+      assert(doc().getElementById('global-api-model').value === 'gpt-4o', '损坏配置应回退默认模型');
+      win().closeGlobalApiModal();
+      // 降级后游戏仍可正常进行（配置损坏不影响游玩）
+      const d = win().TurtleApp.diagnose();
+      assert(d.available === true, '能力探测不受损坏配置影响');
+      window.__tavernVars = { extension: {}, chat: {} };
+    });
+    t12('无酒馆环境：localStorage 持久化且不含 Key，刷新后恢复', async () => {
+      window.__keepLocalStorage = true;
+      try {
+        localStorage.removeItem('ai_turtle_global_api');
+        await mountApp({ tavern: 'none' });
+        configureApiViaUi('https://local.example.com/v1', 'sk-local-secret', 'model-local');
+        const raw = localStorage.getItem('ai_turtle_global_api');
+        assert(raw, '无酒馆时应写入 localStorage');
+        const parsed = JSON.parse(raw);
+        assert(parsed.baseUrl === 'https://local.example.com/v1', 'localStorage 应保存 baseUrl');
+        assert(!JSON.stringify(parsed).includes('sk-local-secret'), 'localStorage 不得包含 API Key');
+
+        await mountApp({ tavern: 'none' }); // keepLocalStorage 使桥不清除存储，模拟刷新
+        win().openGlobalApiModal();
+        assert(doc().getElementById('global-api-url').value === 'https://local.example.com/v1', '刷新后 localStorage 配置应恢复');
+        assert(doc().getElementById('global-api-key').value === '', 'Key 永不恢复');
+        win().closeGlobalApiModal();
+      } finally {
+        window.__keepLocalStorage = false;
+        localStorage.removeItem('ai_turtle_global_api');
+        localStorage.removeItem('ai_turtle_chat_profiles');
+      }
     });
 
     // ================= 运行与渲染 =================
