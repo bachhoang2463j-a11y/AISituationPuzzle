@@ -128,3 +128,11 @@
 - 验收结果：IAB 中 harness 79/79 断言全绿（上轮 74 项零回归；新增：真实模式闲聊主持+3 伙伴 4 次请求全 chat 协议且不触发判定、闲聊不加 turn 不改便签不入账本、闲聊请求双向无汤底、闲聊后关闭开关恢复正常解题、简单模式闲聊 2 次请求且 4 角色恰好各回应一次）。
 - HASH：`a822541`
 
+## 2026-09-11：完成第 12 轮——配置持久化与事件生命周期
+
+- 变更行为：`TurtleSoup.html` 新增 `Persistence` 模块（SPEC 7）：API 配置写 `extension` 作用域 `aiTurtleConfig`、角色人设写 `chat` 作用域 `aiTurtleChatProfiles`（按姓名索引，改名自动迁移旧键），无酒馆变量接口时回退 `localStorage`；**API Key 永不写入任何持久层**（保存时剥离、加载时恒空，运行期仅存内存）；损坏或非法类型数据降级为默认配置不白屏。初始化链改为 `initLifecycle()`：恢复配置 -> 按姓名回放人设到角色数据与座位头像（`<Puzzle>` 名单应用后再次回放）-> 加载谜题 -> 订阅 `CHAT_CHANGED`（幂等防重复订阅）；聊天切换时放弃进行中请求、清空游戏（记录/便签/回合/名单全部重置，游戏过程绝不跨聊天）、按新聊天重新加载人设与谜题。`RESET_GAME` 补充便签墙重置（便签属游戏过程）。harness mock 桥升级：变量桶存 `parent.__tavernVars`（跨挂载存活模拟刷新）、`eventOn` 记录订阅可触发、`__keepLocalStorage` 保留标志，新增第 12 轮断言组 7 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`、`README.md`（第 11 轮经用户确认后更新现状）。
+- 决策原因：计划第 12 轮与 SPEC 7.1/7.2。`Persistence.setVar` 读取失败时不盲目 `replaceVariables` 覆盖整表（防变量接口异常时清空用户其他数据）；API Key 只在会话内存中存在（SPEC 12.1），每次刷新后需重填——安全优先于便利。调试中修正两处 harness 断言：CHAT_CHANGED 断言漏设 responder（产物正确跳过被拒发言）、"损坏配置降级"断言误将"主持人模式"当作降级指标（实际应验证配置字段本身，酒馆环境可用时模式本就是酒馆助手）。产物零返工。
+- 验收结果：IAB 中 harness 86/86 断言全绿（上轮 79 项零回归；新增：保存配置写入 extension 变量且无 Key、刷新恢复配置与 Key 为空且游戏过程不恢复、人设按姓名索引跨刷新恢复、CHAT_CHANGED 清空重建含便签、重复初始化不重复订阅、损坏变量降级不白屏、无酒馆时 localStorage 持久化且无 Key）。
+- HASH：`10628ce`
+
