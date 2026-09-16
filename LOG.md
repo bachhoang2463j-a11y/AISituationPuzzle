@@ -112,3 +112,11 @@
 - 验收结果：IAB 中 harness 69/69 断言全绿（上轮 63 项零回归；新增：模式切换且重置不清空、三伙伴全抽中一次合并请求且无汤底、缺 ID 整批拒绝、重复 ID 整批拒绝、安静回合零请求、切回真实模式恢复逐角色请求）。过程中 8123 静态服务器后台进程退出导致一次误报，重启后全绿。
 - HASH：`d6ee6f8`
 
+## 2026-09-11：完成第 10 轮——中央便签墙与总结者
+
+- 变更行为：`TurtleSoup.html` 回合状态机扩展为四阶段（peer-thinking -> host-thinking -> **summarizing** -> awaiting-player），主持人聚合回答后必进一次总结阶段：总结者由前端从启用伙伴中随机选定（无伙伴时主持人），回合内固定、重试不变；`note-ops-v1` 协议——总结者请求只含汤面、公开记录与当前便签墙（绝无汤底），必须回显 `round_id`/`summarizer_id`，`operations` 数组严格校验（operation_id 唯一、op 限 add/update/remove/move、便签 ID 存在性、类型值域、text 非空），任何不符整批拒绝并保持便签墙原状；合法操作按序应用，新增便签标记 `source: summarizer`。便签模型四类型（confirmed/clue/question/excluded）存 `GameState.notes`，`renderNotes()` 按类型分组重建 DOM（替代 demo 静态便签），点击进入 `editNote` 玩家编辑（prompt 交互，留空删除、可移分类），玩家编辑保留 `source: player` 且总结者 update 不冒充来源；所有公开角色提示词（伙伴/主持人/总结者 user）注入 `<TURTLE_PUBLIC_NOTE_WALL>` 高注意区块（玩家笔记带"（玩家笔记）"标注区分）；停止覆盖 `-summary` 生成 ID。Mock 总结者返回空操作集。harness mock 桥新增 `prompt` 队列、全部 responder 补总结分支、12 处请求计数 +1，新增第 10 轮断言组 5 项。
+- 涉及文件：`TurtleSoup.html`、`integration-test/harness.html`。
+- 决策原因：计划第 10 轮，对齐 SPEC 4.4。玩家编辑交互本轮采用原生 `prompt`/`confirm`（简单优先，符合视觉基线无对应弹窗的现状）；便签移动操作（move）实现为变更分类而非拖拽位置（视觉基线的绝对定位由类型分组渲染决定）。调试均为 harness 侧问题：Direct/simpleMode/组 7 自定义 responder 缺总结者分支（按 system 提示词分发后恢复）、组 9 安静回合断言计数未更新（总结阶段新增 1 次请求）。产物零返工。
+- 验收结果：IAB 中 harness 74/74 断言全绿（上轮 69 项零回归；新增：add/update/move 应用与来源标记、总结者请求双向无汤底且注入便签墙、下一轮公开提示词含 TURTLE_PUBLIC_NOTE_WALL、玩家编辑保留 player 来源且总结者不冒充、round_id 不匹配整批拒绝便签墙原状）。
+- HASH：`0e6d6e2`
+
