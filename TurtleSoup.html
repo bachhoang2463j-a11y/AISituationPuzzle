@@ -1656,28 +1656,28 @@
             <div class="sticky-notes-cluster" id="sticky-notes-cluster">
 
               <!-- 便签 1 -->
-              <div class="sticky-note note-yellow" data-note-type="confirmed" onclick="inspectClue('盲人男子：失明使得他无法亲眼看到在荒岛上吃到的肉')">
+              <div class="sticky-note note-yellow" data-note-type="confirmed">
                 <div class="note-pin"></div>
                 <div class="note-tag">已确认事实</div>
                 <div class="note-text">盲人男子：曾遭遇严重海难幸存</div>
               </div>
 
               <!-- 便签 2 -->
-              <div class="sticky-note note-green" data-note-type="clue" onclick="inspectClue('同伴牺牲：为了让他活下去，谎称是海龟肉')">
+              <div class="sticky-note note-green" data-note-type="clue">
                 <div class="note-pin"></div>
                 <div class="note-tag">重要线索</div>
                 <div class="note-text">同伴曾喂他所谓的“海龟肉”</div>
               </div>
 
               <!-- 便签 3 -->
-              <div class="sticky-note note-pink" data-note-type="question" onclick="inspectClue('自杀动机：意识到当年吃的肉是同伴的肉')">
+              <div class="sticky-note note-pink" data-note-type="question">
                 <div class="note-pin"></div>
                 <div class="note-tag">核心疑问</div>
                 <div class="note-text">为何尝到真正的汤后会绝望自杀？</div>
               </div>
 
               <!-- 便签 4 -->
-              <div class="sticky-note note-blue" data-note-type="excluded" onclick="inspectClue('餐厅正规性：餐厅的海龟汤是真实无毒的')">
+              <div class="sticky-note note-blue" data-note-type="excluded">
                 <div class="note-tape"></div>
                 <div class="note-tag">已排除</div>
                 <div class="note-text">餐厅的海龟汤并无毒药或恶意</div>
@@ -2196,6 +2196,19 @@
       }
     ];
 
+    // --- 中央便签墙初始数据（demo 四类便签，与视觉基线一致） ---
+    const NOTE_TYPES = ["confirmed", "clue", "question", "excluded"];
+    const NOTE_TYPE_CLASS = { confirmed: "note-yellow", clue: "note-green", question: "note-pink", excluded: "note-blue" };
+    const NOTE_TYPE_LABEL = { confirmed: "已确认事实", clue: "重要线索", question: "核心疑问", excluded: "已排除" };
+    let noteSeq = 4;
+
+    const INITIAL_NOTES = [
+      { id: "n-1", type: "confirmed", text: "盲人男子：曾遭遇严重海难幸存", source: "demo" },
+      { id: "n-2", type: "clue", text: "同伴曾喂他所谓的“海龟肉”", source: "demo" },
+      { id: "n-3", type: "question", text: "为何尝到真正的汤后会绝望自杀？", source: "demo" },
+      { id: "n-4", type: "excluded", text: "餐厅的海龟汤并无毒药或恶意", source: "demo" }
+    ];
+
     // --- 最小游戏状态：内存唯一数据源，字段命名对齐 SPEC 第 4 章 ---
     const GameState = {
       schemaVersion: 1,
@@ -2209,7 +2222,8 @@
       initialBubbles: {},             // 启动时从 DOM 快照，重置时恢复
       request: null,                  // 进行中请求 { id, type, startedAt, abortRequested, timeoutId, abortController, questionIds, speakerQueue }，非空时拒绝新请求
       puzzleInput: null,              // 启动时的谜题输入结果 { source, cast, error, warning }
-      cast: null                      // 本局名单 { host, peers[] }；null 表示内置默认名单（三名伙伴）
+      cast: null,                     // 本局名单 { host, peers[] }；null 表示内置默认名单（三名伙伴）
+      notes: INITIAL_NOTES.map(note => ({ ...note })) // 公开便签墙（四类，demo 种子）
     };
 
     // 内置默认名单（demo 角色名），无 <Puzzle> 或重置时使用
@@ -2433,14 +2447,7 @@
       }
     }
 
-    // --- 线索便签快速点击 ---
-    function inspectClue(clueDetail) {
-      const inputEl = document.getElementById("player-input");
-      if (inputEl) {
-        inputEl.value = `关于线索：${clueDetail.split('：')[0]}？`;
-        inputEl.focus();
-      }
-    }
+    // --- 线索便签快速点击（初始 demo 静态结构；启动后由 renderNotes 从状态重建，点击进入 editNote） ---
 
     // --- 渲染右侧对话记录列表 ---
     function renderDialogueList() {
@@ -2564,6 +2571,21 @@
         } catch (err) {
           if (GameState.request !== request) return;
           dispatch({ type: GameAction.HOST_FAILED, error: err });
+          return; // 主持人失败即结束回合，不进总结阶段
+        }
+
+        // 第 10 轮：主持人回答后必进一次总结者阶段（前端已随机选定总结者，回合内固定）
+        if (GameState.request !== request) return;
+        try {
+          const ops = await adapter.summarize(
+            { roundId: request.id, summarizerId: request.summarizerId },
+            { generationId: request.id + "-summary", signal: controller ? controller.signal : undefined }
+          );
+          if (GameState.request !== request) return;
+          dispatch({ type: GameAction.SUMMARY_DONE, ops: ops });
+        } catch (err) {
+          if (GameState.request !== request) return;
+          dispatch({ type: GameAction.SUMMARY_FAILED, error: err });
         }
       }
 
@@ -2596,7 +2618,8 @@
             try { TavernAdapter.stop(request.id + "-peer-" + actorId); } catch (e) {}
           });
         }
-        try { await TavernAdapter.stop(request.id + "-host"); } catch (e) {}
+        try { TavernAdapter.stop(request.id + "-host"); } catch (e) {}
+        try { TavernAdapter.stop(request.id + "-summary"); } catch (e) {}
       }
       if (GameState.request === request) {
         dispatch({ type: GameAction.HOST_ABORTED });
@@ -2614,6 +2637,10 @@
       HOST_ANSWERED: "host-answered",
       HOST_FAILED: "host-failed",
       HOST_ABORTED: "host-aborted",
+      SUMMARY_DONE: "summary-done",
+      SUMMARY_FAILED: "summary-failed",
+      PLAYER_NOTE_UPDATE: "player-note-update",
+      PLAYER_NOTE_REMOVE: "player-note-remove",
       RESET_GAME: "reset-game",
       APPLY_CAST: "apply-cast"
     };
@@ -2636,10 +2663,13 @@
           });
           setBubbleState("player", "我", action.text, null);
           GameState.phase = "peer-thinking";
+          // 总结者由前端随机选定（无伙伴时主持人），回合内固定，重试不变
+          const peerIds = activePeerIds();
           GameState.request = {
             id: "q-" + (++requestSeq), type: "round", startedAt: Date.now(), abortRequested: false,
             timeoutId: null, abortController: null, questionIds: ["q-" + requestSeq],
-            speakerQueue: sampleSpeakers() // 第 8 轮：每轮 50% 独立抽样，回合内不可变
+            speakerQueue: sampleSpeakers(), // 第 8 轮：每轮 50% 独立抽样，回合内不可变
+            summarizerId: peerIds.length ? peerIds[Math.floor(Math.random() * peerIds.length)] : "host"
           };
           triggerSpeakingFx("player");
           break;
@@ -2682,7 +2712,7 @@
 
         case GameAction.HOST_ANSWERED: {
           // action.answers = [{ questionId, verdict, verdictLabel, hostReply }]，覆盖本轮账本
-          if (GameState.request) clearTimeout(GameState.request.timeoutId);
+          // 请求与超时保留到总结阶段结束（SUMMARY_DONE/FAILED 清理）
           action.answers.forEach(a => {
             GameState.records.push({
               id: Date.now() + 1 + GameState.records.length,
@@ -2697,11 +2727,56 @@
           });
           const primary = action.answers[0]; // 气泡展示首条（玩家问题）的判定
           setBubbleState("host", charactersData.host.name, primary.verdictLabel + " " + primary.hostReply, primary.verdict);
-          GameState.request = null;
-          GameState.phase = "awaiting-player";
+          GameState.phase = "summarizing"; // 主持人回答后必进一次总结者阶段
           triggerSpeakingFx("host");
           break;
         }
+
+        case GameAction.SUMMARY_DONE:
+          // action.ops 已经适配器严格校验；按序应用便签操作
+          action.ops.forEach(op => {
+            if (op.op === "add") {
+              GameState.notes.push({ id: "n-" + (++noteSeq), type: op.note_type, text: op.text, source: "summarizer" });
+            } else if (op.op === "update") {
+              const note = GameState.notes.filter(n => n.id === op.note_id)[0];
+              if (note) note.text = op.text; // 玩家便签保留 source: player，不冒充总结者确认
+            } else if (op.op === "remove") {
+              GameState.notes = GameState.notes.filter(n => n.id !== op.note_id);
+            } else if (op.op === "move") {
+              const note = GameState.notes.filter(n => n.id === op.note_id)[0];
+              if (note) note.type = op.note_type;
+            }
+          });
+          if (GameState.request) { clearTimeout(GameState.request.timeoutId); GameState.request = null; }
+          GameState.phase = "awaiting-player";
+          break;
+
+        case GameAction.SUMMARY_FAILED:
+          if (GameState.request) { clearTimeout(GameState.request.timeoutId); GameState.request = null; }
+          GameState.records.push({
+            id: Date.now() + 6,
+            speakerId: "system",
+            speakerName: "系统",
+            text: "总结者失败（" + (action.error && action.error.message ? action.error.message : "未知错误") + "），便签墙保持原状。",
+            type: "system",
+            verdict: null
+          });
+          GameState.phase = "awaiting-player";
+          break;
+
+        case GameAction.PLAYER_NOTE_UPDATE: {
+          const note = GameState.notes.filter(n => n.id === action.noteId)[0];
+          if (note) {
+            note.text = action.text;
+            note.type = action.noteType;
+            note.source = "player"; // 玩家编辑项必须保留来源标记
+          }
+          break;
+        }
+
+        case GameAction.PLAYER_NOTE_REMOVE:
+          GameState.notes = GameState.notes.filter(n => n.id !== action.noteId);
+          break;
 
         case GameAction.HOST_FAILED:
           if (GameState.request) clearTimeout(GameState.request.timeoutId);
@@ -2780,7 +2855,60 @@
       renderSoupBar();
       renderDialogueList();
       renderBubbles();
+      renderNotes();
       renderSendButton();
+    }
+
+    // 中央便签墙：按四类型分组渲染（不改变视觉基线结构，点击进入玩家编辑）
+    function renderNotes() {
+      const cluster = document.getElementById("sticky-notes-cluster");
+      if (!cluster) return;
+      cluster.innerHTML = "";
+      NOTE_TYPES.forEach(type => {
+        GameState.notes.filter(n => n.type === type).forEach(note => {
+          const el = document.createElement("div");
+          el.className = "sticky-note " + NOTE_TYPE_CLASS[type];
+          el.setAttribute("data-note-id", note.id);
+          el.setAttribute("data-note-type", type);
+          const pin = document.createElement("div");
+          pin.className = type === "excluded" ? "note-tape" : "note-pin";
+          const tag = document.createElement("div");
+          tag.className = "note-tag";
+          tag.textContent = NOTE_TYPE_LABEL[type];
+          const text = document.createElement("div");
+          text.className = "note-text";
+          text.textContent = note.text;
+          el.appendChild(pin);
+          el.appendChild(tag);
+          el.appendChild(text);
+          el.addEventListener("click", () => editNote(note.id));
+          cluster.appendChild(el);
+        });
+      });
+      const status = document.getElementById("memo-board-status");
+      if (status) status.textContent = "已整理 " + GameState.notes.length + " 张";
+    }
+
+    // 玩家编辑便签：文本留空并确定即删除；可选移动分类；编辑项标记 source: player
+    function editNote(noteId) {
+      const note = GameState.notes.filter(n => n.id === noteId)[0];
+      if (!note) return;
+      const input = prompt("编辑便签内容（留空并确定将删除该便签）：", note.text);
+      if (input === null) return; // 取消
+      const trimmed = input.trim();
+      if (!trimmed) {
+        if (confirm("确定删除这条便签吗？")) {
+          dispatch({ type: GameAction.PLAYER_NOTE_REMOVE, noteId: noteId });
+        }
+        return;
+      }
+      const typeInput = prompt("移动分类（1 已确认事实 / 2 重要线索 / 3 核心疑问 / 4 已排除，留空保持不变）：", "");
+      let noteType = note.type;
+      if (typeInput !== null && typeInput.trim()) {
+        const idx = parseInt(typeInput.trim(), 10);
+        if (idx >= 1 && idx <= NOTE_TYPES.length) noteType = NOTE_TYPES[idx - 1];
+      }
+      dispatch({ type: GameAction.PLAYER_NOTE_UPDATE, noteId: noteId, text: trimmed, noteType: noteType });
     }
 
     function renderSoupBar() {
@@ -2849,6 +2977,7 @@
         cast: GameState.cast,
         soup: GameState.soup,
         records: GameState.records,
+        notes: GameState.notes,
         request: GameState.request,
         bubbles: GameState.bubbles
       });
@@ -2928,6 +3057,17 @@
         ];
         const raw = await this.generate(prompts, { generationId: opts.generationId });
         return parsePeerBatchV1(raw, actorIds);
+      },
+
+      // 总结者：只看公开信息与当前便签墙，返回便签操作
+      async summarize(ctx, opts) {
+        opts = opts || {};
+        const prompts = [
+          { role: "system", content: buildSummarizerSystemPrompt(ctx.summarizerId) },
+          { role: "user", content: buildSummarizerUserPrompt(ctx.roundId, ctx.summarizerId) }
+        ];
+        const raw = await this.generate(prompts, { generationId: opts.generationId });
+        return parseNoteOpsV1(raw, ctx);
       },
 
       // 主持人聚合判定：与 DirectApiAdapter / MockAdapter 同接口
@@ -3127,6 +3267,9 @@
           }, 1000);
         });
       },
+      summarize(ctx, opts) {
+        return Promise.resolve([]); // 演示总结者：不产生便签操作
+      },
       hostEvaluate(questionText, opts) {
         opts = opts || {};
         const ledger = opts.ledger || [];
@@ -3178,10 +3321,41 @@
       peerBatchEvaluate(actorIds, opts) {
         return requestPeerBatchFromApi(actorIds, opts);
       },
+      summarize(ctx, opts) {
+        return requestSummarizeFromApi(ctx, opts);
+      },
       hostEvaluate(questionText, opts) {
         return requestHostFromApi(questionText, opts);
       }
     };
+
+    async function requestSummarizeFromApi(ctx, opts) {
+      opts = opts || {};
+      const cfg = globalApiConfig;
+      const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
+      const headers = { "Content-Type": "application/json" };
+      if (cfg.apiKey) headers["Authorization"] = "Bearer " + cfg.apiKey;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: headers,
+        signal: opts.signal,
+        body: JSON.stringify({
+          model: cfg.model || "gpt-4o",
+          temperature: cfg.temperature,
+          messages: [
+            { role: "system", content: buildSummarizerSystemPrompt(ctx.summarizerId) },
+            { role: "user", content: buildSummarizerUserPrompt(ctx.roundId, ctx.summarizerId) }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+      if (!res.ok) throw new Error("API 返回 HTTP " + res.status);
+      const data = await res.json();
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : "";
+      return parseNoteOpsV1(String(content || ""), ctx);
+    }
 
     async function requestPeerBatchFromApi(actorIds, opts) {
       opts = opts || {};
@@ -3278,6 +3452,20 @@
       ].join("\n");
     }
 
+    // --- 公开便签墙区块：注入所有公开角色的提示词（SPEC 4.4） ---
+    function buildNoteWallBlock() {
+      if (!GameState.notes.length) return "";
+      const lines = ["<TURTLE_PUBLIC_NOTE_WALL>"];
+      NOTE_TYPES.forEach(type => {
+        const notes = GameState.notes.filter(n => n.type === type);
+        if (!notes.length) return;
+        lines.push("[" + NOTE_TYPE_LABEL[type] + "]");
+        notes.forEach(n => lines.push("- " + n.text + (n.source === "player" ? "（玩家笔记）" : "")));
+      });
+      lines.push("</TURTLE_PUBLIC_NOTE_WALL>");
+      return lines.join("\n");
+    }
+
     function buildPeerUserPrompt() {
       const lines = ["【汤面】" + GameState.soup.surface, "【公开记录】"];
       GameState.records.forEach(item => {
@@ -3285,6 +3473,8 @@
           lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
         }
       });
+      const wall = buildNoteWallBlock();
+      if (wall) lines.push(wall);
       return lines.join("\n");
     }
 
@@ -3354,6 +3544,77 @@
       return expectedIds.map(id => byId[id]); // 按队列顺序返回
     }
 
+    // --- 第 10 轮：note-ops-v1 总结者协议（只返回便签操作，不接触汤底） ---
+    function buildSummarizerSystemPrompt(summarizerId) {
+      const char = charactersData[summarizerId] || charactersData.host;
+      return [
+        "本轮由 " + (char.name || summarizerId) + " 担任总结者，负责维护聚会的公开推演便签墙。",
+        "你只知道汤面、公开讨论和当前便签墙，完全不知道汤底，也不要假装知道答案。",
+        "便签四类：confirmed（已确认事实）、clue（重要线索）、question（核心疑问）、excluded（已排除）。",
+        "根据本轮讨论对便签墙提出操作，宁缺毋滥：add（新增便签，需 note_type 与 text）、update（修改已有便签文本，需 note_id 与 text）、remove（删除失效便签，需 note_id）、move（移动便签分类，需 note_id 与 note_type）。",
+        "玩家笔记是玩家自己的记录，不要删除或改写其内容。",
+        '只输出 note-ops-v1 协议的 JSON 对象：{"protocol":"note-ops-v1","round_id":"<回合ID>","summarizer_id":"<总结者ID>","operations":[{"operation_id":"op-1","op":"add","note_type":"clue","text":"..."}]}，round_id 与 summarizer_id 必须原样使用玩家消息中给出的值，不需要操作时 operations 为空数组，不要输出任何其他内容。'
+      ].join("\n");
+    }
+
+    function buildSummarizerUserPrompt(roundId, summarizerId) {
+      const lines = ["【汤面】" + GameState.soup.surface, "【公开记录】"];
+      GameState.records.forEach(item => {
+        if (item.type === "question" || item.type === "verdict" || item.type === "peer_discussion") {
+          lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
+        }
+      });
+      lines.push("【当前便签墙】");
+      if (GameState.notes.length) {
+        NOTE_TYPES.forEach(type => {
+          const notes = GameState.notes.filter(n => n.type === type);
+          if (notes.length) {
+            lines.push("[" + NOTE_TYPE_LABEL[type] + "]");
+            notes.forEach(n => lines.push("- " + n.id + "：" + n.text + (n.source === "player" ? "（玩家笔记）" : "")));
+          }
+        });
+      } else {
+        lines.push("（空）");
+      }
+      lines.push("【回合ID】" + roundId);
+      lines.push("【总结者ID】" + summarizerId);
+      return lines.join("\n");
+    }
+
+    // note-ops-v1 严格校验：协议、round_id、summarizer_id 回显、operation_id 唯一、便签 ID 存在性；任何不符整批拒绝
+    function parseNoteOpsV1(content, ctx) {
+      const start = content.indexOf("{");
+      const end = content.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("总结者响应不是 JSON");
+      let parsed;
+      try {
+        parsed = JSON.parse(content.slice(start, end + 1));
+      } catch (e) {
+        throw new Error("总结者响应 JSON 解析失败");
+      }
+      if (parsed.protocol !== "note-ops-v1") throw new Error("总结者响应协议不是 note-ops-v1");
+      if (parsed.round_id !== ctx.roundId) throw new Error("总结者响应 round_id 不匹配（期望 " + ctx.roundId + "）");
+      if (parsed.summarizer_id !== ctx.summarizerId) throw new Error("总结者响应 summarizer_id 不匹配（期望 " + ctx.summarizerId + "）");
+      const ops = Array.isArray(parsed.operations) ? parsed.operations : null;
+      if (!ops) throw new Error("总结者响应缺少 operations");
+      const knownIds = {};
+      GameState.notes.forEach(n => { knownIds[n.id] = true; });
+      const seenOpIds = {};
+      ops.forEach(op => {
+        if (!op.operation_id || seenOpIds[op.operation_id]) throw new Error("operation_id 缺失或重复");
+        seenOpIds[op.operation_id] = true;
+        if (["add", "update", "remove", "move"].indexOf(op.op) < 0) throw new Error("未知便签操作：" + op.op);
+        if (op.op === "add") {
+          if (NOTE_TYPES.indexOf(op.note_type) < 0 || !String(op.text || "").trim()) throw new Error("add 操作字段非法");
+        } else {
+          if (!knownIds[op.note_id]) throw new Error("便签不存在：" + op.note_id);
+          if (op.op === "update" && !String(op.text || "").trim()) throw new Error("update 操作缺 text");
+          if (op.op === "move" && NOTE_TYPES.indexOf(op.note_type) < 0) throw new Error("move 操作目标类型非法");
+        }
+      });
+      return ops;
+    }
+
     function buildHostSystemPrompt() {
       return [
         "你是海龟汤游戏的主持人，掌握完整汤底，只依据汤底判定本轮所有问题。",
@@ -3372,6 +3633,8 @@
           lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
         }
       });
+      const wall = buildNoteWallBlock();
+      if (wall) lines.push(wall);
       lines.push("【本轮问题】");
       (ledger || []).forEach(qId => {
         const rec = GameState.records.filter(r => r.questionId === qId)[0];

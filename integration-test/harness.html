@@ -106,6 +106,7 @@
       "window.addEventListener('error', function(e){ window.__appErrors.push(String(e.message)); });",
       "window.confirm = function(){ return true; };",
       "window.alert = function(){};",
+      "window.__promptQueue = []; window.prompt = function(msg, def){ var v = window.__promptQueue.shift(); return v === undefined ? (def || '') : v; };",
       "try { localStorage.removeItem('ai_turtle_global_api'); localStorage.removeItem('ai_turtle_avatar_library'); } catch (e) {}",
       "window.__tavernMock = { calls: { generateRaw: 0, generate: 0, getVariables: 0, stopGeneration: 0 }, generateRawCalls: [], generateRawResponder: null };",
       "window.__fetchMock = { calls: [], responder: null, trace: [] };",
@@ -405,13 +406,44 @@
         const body = JSON.parse(call.opts.body);
         const sys = body.messages[0].content;
         if (sys.includes('peer-speech-v1')) return mockLlmResponse(peerSpeechJson(peerText, sys));
+        if (sys.includes('peer-batch-v1')) {
+          const ids = [...new Set((sys.match(/ai-\d+/g) || []))];
+          return mockLlmResponse(JSON.stringify({ protocol: 'peer-batch-v1', speeches: ids.map(id => ({ actor_id: id, text: peerText })) }));
+        }
+        if (sys.includes('note-ops-v1')) {
+          const user = body.messages[1].content;
+          const roundId = (/【回合ID】(q-\d+)/.exec(user) || [])[1] || 'q-0';
+          const sumId = (/【总结者ID】(ai-\d+|host)/.exec(user) || [])[1] || 'host';
+          return mockLlmResponse(JSON.stringify({ protocol: 'note-ops-v1', round_id: roundId, summarizer_id: sumId, operations: [] }));
+        }
         return mockLlmResponse(v2AnswerJson(extractLedger(body.messages[1].content), verdict, answer));
       };
     }
+    // note-ops-v1 便捷 responder：从 user 提示词提取 round_id / summarizer_id 回显校验值；mode: ok | bad-round | bad-summarizer | ops
+    function summarizeResponder(mode, ops) {
+      return opts => {
+        const user = opts.ordered_prompts[1].content;
+        const roundId = (/【回合ID】(q-\d+)/.exec(user) || [])[1] || 'q-0';
+        const sumId = (/【总结者ID】(ai-\d+|host)/.exec(user) || [])[1] || 'host';
+        const body = {
+          protocol: 'note-ops-v1',
+          round_id: mode === 'bad-round' ? 'q-999' : roundId,
+          summarizer_id: mode === 'bad-summarizer' ? 'ai-9' : sumId,
+          operations: mode === 'ops' ? ops : []
+        };
+        return Promise.resolve(JSON.stringify(body));
+      };
+    }
+    // 全能 responder：peer / peer-batch / host / summary 一体分发
     function smartTavernResponder(peerText, verdict, answer) {
       return opts => {
         const sys = opts.ordered_prompts[0].content;
         if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson(peerText, sys));
+        if (sys.includes('peer-batch-v1')) {
+          const ids = [...new Set((sys.match(/ai-\d+/g) || []))];
+          return Promise.resolve(JSON.stringify({ protocol: 'peer-batch-v1', speeches: ids.map(id => ({ actor_id: id, text: peerText })) }));
+        }
+        if (sys.includes('note-ops-v1')) return summarizeResponder('ok')(opts);
         return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), verdict, answer));
       };
     }
@@ -437,7 +469,7 @@
       await sendQuestion('男子的遭遇和海难有关吗？');
       await waitForRecords(base + 4); // 玩家问题 + 伙伴发言 + 两条判定
 
-      assert(win().__fetchMock.calls.length === 2, '应恰好发出伙伴与主持人共 2 次请求，实际 ' + win().__fetchMock.calls.length);
+      assert(win().__fetchMock.calls.length === 3, '应恰好发出伙伴、主持人与总结者共 3 次请求，实际 ' + win().__fetchMock.calls.length);
       const call = win().__fetchMock.calls[0];
       assert(call.url === 'https://mock-llm.example.com/v1/chat/completions', '请求 URL 不符: ' + call.url);
       assert(call.opts.method === 'POST', '请求方法应为 POST');
@@ -573,7 +605,7 @@
       const base = recordCount();
       await sendQuestion('海龟汤测试：男子的过去与大海有关吗？');
       await waitForRecords(base + 4, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 2, 'generateRaw 应恰好调用 2 次（伙伴+主持人），实际 ' + win().__tavernMock.calls.generateRaw);
+      assert(win().__tavernMock.calls.generateRaw === 3, 'generateRaw 应恰好调用 3 次（伙伴+主持人+总结者），实际 ' + win().__tavernMock.calls.generateRaw);
       const hostCall = win().__tavernMock.generateRawCalls[1]; // 第 2 次调用是主持人
       assert(hostCall.should_silence === true, '生成应为静默（不占用酒馆停止按钮）');
       const prompts = hostCall.ordered_prompts;
@@ -589,7 +621,7 @@
       const base = recordCount();
       await sendQuestion('优先级测试：汤里有毒吗？');
       await waitForRecords(base + 4, 30000);
-      assert(win().__fetchMock.calls.length === 2, '应走直连 fetch 两次（伙伴+主持人，实际 ' + win().__fetchMock.calls.length + ' 次）');
+      assert(win().__fetchMock.calls.length === 3, '应走直连 fetch 三次（伙伴+主持人+总结者，实际 ' + win().__fetchMock.calls.length + ' 次）');
       assert(win().__tavernMock.calls.generateRaw === 0, '不应调用 generateRaw');
     });
     t4('generateRaw 失败：显示可操作错误且可直接重试成功', async () => {
@@ -659,7 +691,7 @@
       const base = recordCount();
       await sendQuestion('名单生效后：男子的过去与大海有关吗？');
       await waitForRecords(base + 4, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 2, 'generateRaw 应被调用 2 次（伙伴+主持人）');
+      assert(win().__tavernMock.calls.generateRaw === 3, 'generateRaw 应被调用 3 次（伙伴+主持人+总结者）');
       const systemMsg = win().__tavernMock.generateRawCalls[1].ordered_prompts[0].content;
       assert(systemMsg.includes('<TURTLE_SECRET>') && systemMsg.includes(SECRET_MARK), '主持人请求应含汤底');
       const publicText = [...doc().querySelectorAll('.item-text, .bubble-content')].map(el => el.textContent).join('\n');
@@ -799,7 +831,7 @@
       const base = recordCount();
       await sendQuestion('伙伴回合测试：男子的职业与海有关吗？');
       await waitForRecords(base + 4, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 2, '一次玩家动作应恰好一伙伴一主持人请求');
+      assert(win().__tavernMock.calls.generateRaw === 3, '一次玩家动作应恰好一伙伴一主持人一总结者请求');
       const peerSys = win().__tavernMock.generateRawCalls[0].ordered_prompts[0].content;
       const hostSys = win().__tavernMock.generateRawCalls[1].ordered_prompts[0].content;
       assert(peerSys.includes('peer-speech-v1'), '第 1 次请求应是伙伴发言');
@@ -824,6 +856,7 @@
       win().__tavernMock.generateRawResponder = opts => {
         const sys = opts.ordered_prompts[0].content;
         if (sys.includes('peer-speech-v1')) return Promise.reject(new Error('伙伴请求失败'));
+        if (sys.includes('note-ops-v1')) return summarizeResponder('ok')(opts);
         return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), 'no', '否，与海难无关。'));
       };
       const base = recordCount();
@@ -860,7 +893,7 @@
       await sendQuestion('全抽中测试：男子的过去与海有关吗？');
       await waitForRecords(base + 8, 30000); // 玩家 + 3 伙伴发言 + 4 判定
       const calls = win().__tavernMock.generateRawCalls;
-      assert(calls.length === 4, '应为 3 伙伴 + 1 主持人共 4 次请求，实际 ' + calls.length);
+      assert(calls.length === 5, '应为 3 伙伴 + 1 主持人 + 1 总结者共 5 次请求，实际 ' + calls.length);
       assert(calls[0].generation_id.indexOf('-peer-ai-1') >= 0, '第 1 次请求应为 ai-1');
       assert(calls[1].generation_id.indexOf('-peer-ai-2') >= 0, '第 2 次请求应为 ai-2（队列顺序）');
       assert(calls[2].generation_id.indexOf('-peer-ai-3') >= 0, '第 3 次请求应为 ai-3（队列顺序）');
@@ -878,7 +911,7 @@
       const base = recordCount();
       await sendQuestion('安静回合测试：汤里下了毒吗？');
       await waitForRecords(base + 2, 30000); // 仅玩家问题 + 1 判定
-      assert(win().__tavernMock.calls.generateRaw === 1, '安静回合应只有主持人 1 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+      assert(win().__tavernMock.calls.generateRaw === 2, '安静回合应只有主持人 + 总结者共 2 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
       const state = JSON.parse(win().serializeState());
       assert(state.records[state.records.length - 1].type === 'verdict', '应有玩家判定');
     });
@@ -914,7 +947,7 @@
       const base = recordCount();
       await sendQuestion('单人局测试：汤是热的吗？');
       await waitForRecords(base + 4, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 2, '应只有 ai-1 伙伴与主持人共 2 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+      assert(win().__tavernMock.calls.generateRaw === 3, '应只有 ai-1 伙伴、主持人与总结者共 3 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
     });
     t8('<Puzzle> 零伙伴（仅主持人）：AI 座位全部隐藏，直接进入主持人阶段', async () => {
       await mountApp({ tavern: 'full', chatMessages: puzzleMessage('游戏数据栏:\n  主持人: "独行侠"') });
@@ -926,7 +959,7 @@
       const base = recordCount();
       await sendQuestion('零伙伴局测试：可以开始了吗？');
       await waitForRecords(base + 2, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 1, '零伙伴局应只有主持人 1 次请求');
+      assert(win().__tavernMock.calls.generateRaw === 2, '零伙伴局应只有主持人 + 总结者共 2 次请求');
       // 重置后回到默认三名伙伴，座位恢复
       win().clearDialogueHistory();
       assert(doc().getElementById('seat-ai-1').style.display !== 'none', '重置后 ai 座位应恢复显示');
@@ -954,6 +987,7 @@
           if (mode === 'duplicate' && ids.length >= 2) speeches = [{ actor_id: ids[0], text: '重复。' }, { actor_id: ids[0], text: '重复。' }];
           return Promise.resolve(JSON.stringify({ protocol: 'peer-batch-v1', speeches: speeches }));
         }
+        if (sys.includes('note-ops-v1')) return summarizeResponder('ok')(opts);
         if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson('单伙伴发言。', sys));
         return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), verdict, answer));
       };
@@ -977,7 +1011,7 @@
       await sendQuestion('合并请求测试：男子的过去与海有关吗？');
       await waitForRecords(base + 8, 30000); // 玩家 + 3 伙伴发言 + 4 判定
       const calls = win().__tavernMock.generateRawCalls;
-      assert(calls.length === 2, '简单模式应为 1 次合并 + 1 次主持人共 2 次请求，实际 ' + calls.length);
+      assert(calls.length === 3, '简单模式应为 1 次合并 + 1 主持人 + 1 总结者共 3 次请求，实际 ' + calls.length);
       assert(calls[0].generation_id.indexOf('-peer-batch') >= 0, '第 1 次请求应为伙伴合并请求');
       assert(calls[0].ordered_prompts[0].content.includes('peer-batch-v1'), '合并请求 system 应为 peer-batch-v1 协议');
       assert(!calls[0].ordered_prompts[0].content.includes(SECRET_MARK) && !calls[0].ordered_prompts[1].content.includes(SECRET_MARK), '合并请求不得包含汤底');
@@ -994,7 +1028,7 @@
       const base = recordCount();
       await sendQuestion('缺 ID 测试：这次批次少一个人。');
       await waitForRecords(base + 3, 30000); // 玩家 + 批次失败记录 + 玩家判定
-      assert(win().__tavernMock.calls.generateRaw === 2, '应为合并 + 主持人共 2 次请求');
+      assert(win().__tavernMock.calls.generateRaw === 3, '应为合并 + 主持人 + 总结者共 3 次请求');
       const last = lastRecord();
       assert(last.classList.contains('is-verdict'), '整批拒绝后主持人仍应回答玩家问题');
       const state = JSON.parse(win().serializeState());
@@ -1022,7 +1056,7 @@
       const base = recordCount();
       await sendQuestion('安静回合测试：大家都不说话。');
       await waitForRecords(base + 2, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 1, '安静回合应只有主持人 1 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+      assert(win().__tavernMock.calls.generateRaw === 2, '安静回合应只有主持人 + 总结者共 2 次请求（不发合并请求），实际 ' + win().__tavernMock.calls.generateRaw);
     });
     t9('真实模式回归：切回后恢复逐角色请求', async () => {
       await mountApp({ tavern: 'full' });
@@ -1034,7 +1068,112 @@
       const base = recordCount();
       await sendQuestion('真实回归测试：汤是热的吗？');
       await waitForRecords(base + 8, 30000);
-      assert(win().__tavernMock.calls.generateRaw === 4, '真实模式应为 3 伙伴 + 1 主持人共 4 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+      assert(win().__tavernMock.calls.generateRaw === 5, '真实模式应为 3 伙伴 + 1 主持人 + 1 总结者共 5 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+    });
+
+    // ================= 组 10：中央便签墙与总结者（第 10 轮验收） =================
+    const t10 = group('第 10 轮 · 中央便签墙与总结者');
+
+    function noteCount() {
+      return doc().querySelectorAll('#sticky-notes-cluster .sticky-note').length;
+    }
+
+    t10('总结者操作应用：add/update/move 生效且来源标记正确', async () => {
+      await mountApp({ tavern: 'full' });
+      const initial = noteCount();
+      const firstNoteId = JSON.parse(win().serializeState()).notes[0].id;
+      win().__tavernMock.generateRawResponder = opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('note-ops-v1')) {
+          return summarizeResponder('ops', [
+            { operation_id: 'op-1', op: 'add', note_type: 'clue', text: '男子与海难有关（总结者新增）' },
+            { operation_id: 'op-2', op: 'update', note_id: firstNoteId, text: '盲人男子：海难幸存（总结者更新）' },
+            { operation_id: 'op-3', op: 'move', note_id: firstNoteId, note_type: 'excluded' }
+          ])(opts);
+        }
+        return smartTavernResponder('我想问：和便签有关。', 'yes', '回答。')(opts);
+      };
+      const base = recordCount();
+      await sendQuestion('便签操作测试：本轮讨论有新线索。');
+      await waitForRecords(base + 4, 30000);
+      await sleep(300); // 等待总结阶段完成
+      const state = JSON.parse(win().serializeState());
+      assert(state.phase === 'awaiting-player', '总结后应回到等待玩家');
+      assert(state.notes.length === initial + 1, '便签应净 +1（增1-移0+改1不变数量）: ' + state.notes.length + ' vs ' + (initial + 1));
+      assert(state.notes.some(n => n.text === '男子与海难有关（总结者新增）' && n.source === 'summarizer'), '新增便签应标记 summarizer 来源');
+      const moved = state.notes.filter(n => n.id === firstNoteId)[0];
+      assert(moved && moved.type === 'excluded' && moved.text.includes('总结者更新'), 'update 与 move 应生效');
+      assert(noteCount() === state.notes.length, 'DOM 便签数应与状态一致');
+    });
+    t10('总结者请求隔离：无汤底，且注入当前便签墙', async () => {
+      const calls = win().__tavernMock.generateRawCalls;
+      const sumCall = calls[calls.length - 1];
+      const sys = sumCall.ordered_prompts[0].content;
+      const user = sumCall.ordered_prompts[1].content;
+      assert(sys.includes('note-ops-v1'), '最后请求应为总结者');
+      assert(!sys.includes('<TURTLE_SECRET>') && !sys.includes(SECRET_MARK), '总结者 system 不得含汤底');
+      assert(!user.includes(SECRET_MARK), '总结者 user 不得含汤底');
+      assert(user.includes('【当前便签墙】') && user.includes('盲人男子'), 'user 应包含当前便签墙');
+    });
+    t10('下一轮公开提示词包含 TURTLE_PUBLIC_NOTE_WALL 便签区块', async () => {
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：看得到便签吗？', 'no', '否。');
+      const base = recordCount();
+      await sendQuestion('便签注入测试：伙伴能看到便签墙吗？');
+      await waitForRecords(base + 4, 30000);
+      const n = win().__tavernMock.generateRawCalls.length;
+      const peerCall = win().__tavernMock.generateRawCalls[n - 3];
+      const peerUser = peerCall.ordered_prompts[1].content;
+      assert(peerCall.ordered_prompts[0].content.includes('peer-speech-v1'), '倒数第 3 次应为伙伴请求');
+      assert(peerUser.includes('<TURTLE_PUBLIC_NOTE_WALL>'), '伙伴 user 提示词应含便签墙区块');
+      assert(peerUser.includes('男子与海难有关'), '便签墙内容应注入');
+      const hostCall = win().__tavernMock.generateRawCalls[n - 2];
+      assert(hostCall.ordered_prompts[0].content.includes('host-answer-v2'), '倒数第 2 次应为主持人请求');
+      assert(hostCall.ordered_prompts[1].content.includes('<TURTLE_PUBLIC_NOTE_WALL>'), '主持人 user 提示词也应含便签墙区块');
+    });
+    t10('玩家编辑便签：保留 source: player，总结者更新不冒充', async () => {
+      await mountApp({ tavern: 'full' });
+      const noteId = JSON.parse(win().serializeState()).notes[0].id;
+      win().__promptQueue.push('玩家改写的便签内容', '2'); // 文本 + 分类
+      win().editNote(noteId);
+      const state = JSON.parse(win().serializeState());
+      const edited = state.notes.filter(n => n.id === noteId)[0];
+      assert(edited && edited.text === '玩家改写的便签内容', '便签文本应被玩家更新');
+      assert(edited.source === 'player', '玩家编辑必须保留 source: player 标记');
+      assert(edited.type === 'clue', '分类应按玩家选择移动');
+      // 总结者更新玩家便签：文本可改，来源标记不冒充
+      win().__tavernMock.generateRawResponder = opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('note-ops-v1')) {
+          return summarizeResponder('ops', [{ operation_id: 'op-1', op: 'update', note_id: noteId, text: '总结者改写' }])(opts);
+        }
+        return smartTavernResponder('我想问：来源标记。', 'no', '否。')(opts);
+      };
+      const base = recordCount();
+      await sendQuestion('来源标记测试：便签是谁写的？');
+      await waitForRecords(base + 4, 30000);
+      await sleep(300);
+      const after = JSON.parse(win().serializeState()).notes.filter(n => n.id === noteId)[0];
+      assert(after.text === '总结者改写', '总结者应能更新玩家便签文本');
+      assert(after.source === 'player', '但来源标记必须保留 player，不冒充总结者确认');
+    });
+    t10('round_id 不匹配的总结响应整批拒绝，便签墙保持原状', async () => {
+      await mountApp({ tavern: 'full' });
+      const before = JSON.parse(win().serializeState()).notes.length;
+      win().__tavernMock.generateRawResponder = opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('note-ops-v1')) {
+          return summarizeResponder('bad-round', [{ operation_id: 'op-1', op: 'add', note_type: 'clue', text: '不应生效' }])(opts);
+        }
+        return smartTavernResponder('我想问：会被拒绝。', 'no', '否。')(opts);
+      };
+      const base = recordCount();
+      await sendQuestion('round_id 校验测试：总结者回显错误 ID。');
+      await waitForRecords(base + 5, 30000); // 玩家+伙伴+2判定+总结失败记录
+      const state = JSON.parse(win().serializeState());
+      assert(state.phase === 'awaiting-player', '拒绝后应回到等待玩家');
+      assert(state.notes.length === before, '便签墙应保持原状');
+      const last = lastRecord();
+      assert(last.querySelector('.item-text').textContent.includes('总结者失败'), '应有总结失败记录');
     });
 
     // ================= 运行与渲染 =================
