@@ -1931,6 +1931,17 @@
 
           <div class="settings-item">
             <div>
+              <div class="settings-title">简单模式（合并请求）</div>
+              <div class="settings-desc">一次请求让 AI 同时扮演本轮抽中的多名伙伴；关闭则逐个请求</div>
+            </div>
+            <label class="switch-toggle">
+              <input type="checkbox" id="setting-simple-mode" onchange="toggleSimpleMode(this.checked)">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div class="settings-item">
+            <div>
               <div class="settings-title">清空本局对话历史</div>
               <div class="settings-desc">重置右侧所有提问与裁判判定记录</div>
             </div>
@@ -2188,7 +2199,8 @@
     // --- 最小游戏状态：内存唯一数据源，字段命名对齐 SPEC 第 4 章 ---
     const GameState = {
       schemaVersion: 1,
-      phase: "awaiting-player",       // awaiting-player | host-thinking
+      phase: "awaiting-player",       // awaiting-player | peer-thinking | host-thinking
+      mode: "real",                   // real（逐角色请求） | simple（合并请求）；偏好设置，重置不清空
       turn: 0,                        // 玩家已发起的提问回合数
       soup: { surface: "男子走进一家餐厅点了一碗海龟汤，尝了一口后，冲出餐厅自杀了。为什么？" },
       secret: { truth: "男子曾遭遇海难，同伴割下自己的肉谎称是海龟肉救了他；他在餐厅尝到真正的海龟汤后明白真相，愧疚崩溃自杀。" }, // 仅进入主持人请求，永不进入公共状态与 UI
@@ -2382,7 +2394,14 @@
     }
 
     // --- 系统设置弹窗逻辑 ---
+    function toggleSimpleMode(enabled) {
+      GameState.mode = enabled ? "simple" : "real";
+      renderDiagnosis();
+    }
+
     function openSettingsModal() {
+      const modeCheck = document.getElementById("setting-simple-mode");
+      if (modeCheck) modeCheck.checked = GameState.mode === "simple";
       renderAvatarLibraryInSettings();
       renderDiagnosis();
       document.getElementById("settings-modal-overlay").classList.add("active");
@@ -2504,18 +2523,32 @@
           }
         }, timeoutMs);
 
-        // 第 8 轮：按抽样队列串行请求伙伴公开发言（顺序即显示顺序），单个失败不丢失其他伙伴结果
-        for (const actorId of request.speakerQueue) {
+        // 第 8/9 轮：真实模式按队列串行逐角色请求；简单模式一次合并请求扮演全部抽中伙伴
+        if (GameState.mode === "simple" && request.speakerQueue.length > 0) {
           try {
-            const speech = await adapter.peerEvaluate(actorId, {
-              generationId: request.id + "-peer-" + actorId,
+            const speeches = await adapter.peerBatchEvaluate(request.speakerQueue, {
+              generationId: request.id + "-peer-batch",
               signal: controller ? controller.signal : undefined
             });
             if (GameState.request !== request) return; // 回合已被重置或停止
-            dispatch({ type: GameAction.PEER_ANSWERED, speech: speech });
+            speeches.forEach(speech => dispatch({ type: GameAction.PEER_ANSWERED, speech: speech }));
           } catch (err) {
             if (GameState.request !== request) return;
-            dispatch({ type: GameAction.PEER_FAILED, error: err, actorId: actorId });
+            dispatch({ type: GameAction.PEER_FAILED, error: err, actorId: null, batch: true }); // 整批拒绝，跳过伙伴讨论
+          }
+        } else {
+          for (const actorId of request.speakerQueue) {
+            try {
+              const speech = await adapter.peerEvaluate(actorId, {
+                generationId: request.id + "-peer-" + actorId,
+                signal: controller ? controller.signal : undefined
+              });
+              if (GameState.request !== request) return; // 回合已被重置或停止
+              dispatch({ type: GameAction.PEER_ANSWERED, speech: speech });
+            } catch (err) {
+              if (GameState.request !== request) return;
+              dispatch({ type: GameAction.PEER_FAILED, error: err, actorId: actorId });
+            }
           }
         }
         if (GameState.request !== request) return;
@@ -2547,7 +2580,7 @@
       return activePeerIds().filter(actorId => random() < 0.5);
     }
 
-    // 停止进行中的回合：本地立即回到可操作状态，并尽力中断底层生成（每个伙伴与主持人各一个生成 ID）
+    // 停止进行中的回合：本地立即回到可操作状态，并尽力中断底层生成（伙伴批次/逐伙伴与主持人各一个生成 ID）
     async function stopHostRequest() {
       const request = GameState.request;
       if (!request) return;
@@ -2556,9 +2589,13 @@
       }
       const adapter = pickHostAdapter();
       if (adapter === TavernAdapter && TavernAdapter.capabilities.stop) {
-        (request.speakerQueue || []).forEach(actorId => {
-          try { TavernAdapter.stop(request.id + "-peer-" + actorId); } catch (e) {}
-        });
+        if (GameState.mode === "simple") {
+          try { TavernAdapter.stop(request.id + "-peer-batch"); } catch (e) {}
+        } else {
+          (request.speakerQueue || []).forEach(actorId => {
+            try { TavernAdapter.stop(request.id + "-peer-" + actorId); } catch (e) {}
+          });
+        }
         try { await TavernAdapter.stop(request.id + "-host"); } catch (e) {}
       }
       if (GameState.request === request) {
@@ -2631,7 +2668,9 @@
             id: Date.now() + 5,
             speakerId: "system",
             speakerName: "系统",
-            text: "伙伴 " + (charactersData[action.actorId] ? charactersData[action.actorId].name : action.actorId) + " 发言失败（" + (action.error && action.error.message ? action.error.message : "未知错误") + "），本轮跳过其发言。",
+            text: action.batch
+              ? "伙伴批次失败（" + (action.error && action.error.message ? action.error.message : "未知错误") + "），本轮跳过伙伴讨论。"
+              : "伙伴 " + (charactersData[action.actorId] ? charactersData[action.actorId].name : action.actorId) + " 发言失败（" + (action.error && action.error.message ? action.error.message : "未知错误") + "），本轮跳过其发言。",
             type: "system",
             verdict: null
           });
@@ -2805,6 +2844,7 @@
       return JSON.stringify({
         schemaVersion: GameState.schemaVersion,
         phase: GameState.phase,
+        mode: GameState.mode,
         turn: GameState.turn,
         cast: GameState.cast,
         soup: GameState.soup,
@@ -2877,6 +2917,17 @@
         ];
         const raw = await this.generate(prompts, { generationId: opts.generationId });
         return parsePeerSpeechV1(raw, actorId);
+      },
+
+      // 简单模式：一次请求扮演抽中队列的全部伙伴
+      async peerBatchEvaluate(actorIds, opts) {
+        opts = opts || {};
+        const prompts = [
+          { role: "system", content: buildPeerBatchSystemPrompt(actorIds) },
+          { role: "user", content: buildPeerBatchUserPrompt() }
+        ];
+        const raw = await this.generate(prompts, { generationId: opts.generationId });
+        return parsePeerBatchV1(raw, actorIds);
       },
 
       // 主持人聚合判定：与 DirectApiAdapter / MockAdapter 同接口
@@ -3069,6 +3120,13 @@
           }, 800);
         });
       },
+      peerBatchEvaluate(actorIds, opts) {
+        return new Promise(resolve => {
+          setTimeout(() => {
+            resolve(actorIds.map(id => ({ actorId: id, text: MOCK_PEER_TEXTS[id] || "我想问：还有其他线索吗？" })));
+          }, 1000);
+        });
+      },
       hostEvaluate(questionText, opts) {
         opts = opts || {};
         const ledger = opts.ledger || [];
@@ -3117,10 +3175,41 @@
       peerEvaluate(actorId, opts) {
         return requestPeerFromApi(actorId, opts);
       },
+      peerBatchEvaluate(actorIds, opts) {
+        return requestPeerBatchFromApi(actorIds, opts);
+      },
       hostEvaluate(questionText, opts) {
         return requestHostFromApi(questionText, opts);
       }
     };
+
+    async function requestPeerBatchFromApi(actorIds, opts) {
+      opts = opts || {};
+      const cfg = globalApiConfig;
+      const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
+      const headers = { "Content-Type": "application/json" };
+      if (cfg.apiKey) headers["Authorization"] = "Bearer " + cfg.apiKey;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: headers,
+        signal: opts.signal,
+        body: JSON.stringify({
+          model: cfg.model || "gpt-4o",
+          temperature: cfg.temperature,
+          messages: [
+            { role: "system", content: buildPeerBatchSystemPrompt(actorIds) },
+            { role: "user", content: buildPeerBatchUserPrompt() }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+      if (!res.ok) throw new Error("API 返回 HTTP " + res.status);
+      const data = await res.json();
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : "";
+      return parsePeerBatchV1(String(content || ""), actorIds);
+    }
 
     async function requestPeerFromApi(actorId, opts) {
       opts = opts || {};
@@ -3214,6 +3303,55 @@
       const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
       if (!text) throw new Error("伙伴响应 text 为空");
       return { actorId: parsed.actor_id, text: text };
+    }
+
+    // --- 第 9 轮：peer-batch-v1 简单模式合并协议（一次请求扮演抽中队列的多个伙伴） ---
+    function buildPeerBatchSystemPrompt(actorIds) {
+      const roles = actorIds.map(id => {
+        const char = charactersData[id] || {};
+        return id + "（" + (char.name || id) + "）：" + (char.prompt || "你是玩家的朋友，正在一起推理海龟汤谜题。");
+      });
+      return [
+        "你将在同一次回复中分别扮演多名玩家的朋友，基于汤面和公开讨论各提出一条有助于解题的简短问题。",
+        "参与角色（每人必须恰好发言一次，不得代答、不得遗漏）：",
+        ...roles.map(r => "  - " + r),
+        "每个角色都只知道汤面和公开讨论，完全不知道汤底，也不要假装知道答案。",
+        '只输出 peer-batch-v1 协议的 JSON 对象：{"protocol":"peer-batch-v1","speeches":[{"actor_id":"ai-1","text":"..."},{"actor_id":"ai-2","text":"..."}]}，speeches 必须且只能包含上述每个 actor_id 各一次，不要输出任何其他内容。'
+      ].join("\n");
+    }
+
+    function buildPeerBatchUserPrompt() {
+      return buildPeerUserPrompt(); // 公共信息投影与单伙伴一致
+    }
+
+    // peer-batch-v1 严格校验：speeches 与抽样队列集合完全相等（不漏、不重、无未知 ID），text 非空
+    function parsePeerBatchV1(content, expectedIds) {
+      const start = content.indexOf("{");
+      const end = content.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("伙伴批次响应不是 JSON");
+      let parsed;
+      try {
+        parsed = JSON.parse(content.slice(start, end + 1));
+      } catch (e) {
+        throw new Error("伙伴批次响应 JSON 解析失败");
+      }
+      if (parsed.protocol !== "peer-batch-v1") throw new Error("伙伴批次响应协议不是 peer-batch-v1");
+      const speeches = Array.isArray(parsed.speeches) ? parsed.speeches : null;
+      if (!speeches || speeches.length !== expectedIds.length) {
+        throw new Error("speeches 数量与抽样队列不符（期望 " + expectedIds.length + " 条，收到 " + (speeches ? speeches.length : 0) + " 条）");
+      }
+      const byId = {};
+      speeches.forEach(s => {
+        const text = typeof s.text === "string" ? s.text.trim() : "";
+        if (!text) throw new Error("伙伴批次存在空 text");
+        if (expectedIds.indexOf(s.actor_id) < 0) throw new Error("伙伴批次含未知 actor_id: " + s.actor_id);
+        if (byId[s.actor_id]) throw new Error("伙伴批次重复 actor_id: " + s.actor_id);
+        byId[s.actor_id] = { actorId: s.actor_id, text: text };
+      });
+      expectedIds.forEach(id => {
+        if (!byId[id]) throw new Error("伙伴批次遗漏 actor_id: " + id);
+      });
+      return expectedIds.map(id => byId[id]); // 按队列顺序返回
     }
 
     function buildHostSystemPrompt() {

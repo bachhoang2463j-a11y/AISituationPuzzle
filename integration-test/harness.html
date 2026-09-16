@@ -933,6 +933,110 @@
       assert(seatName('host') === '赫尔墨斯', '重置后应回到默认名单');
     });
 
+    // ================= 组 9：简单模式合并请求（第 9 轮验收） =================
+    const t9 = group('第 9 轮 · 简单模式合并请求（peer-batch-v1）');
+
+    function setSimpleMode(on) {
+      win().openSettingsModal();
+      const cb = doc().getElementById('setting-simple-mode');
+      cb.checked = on;
+      win().toggleSimpleMode(on);
+      win().closeSettingsModal();
+    }
+    // 简单模式 responder：batch 按 system 提示词中列出的 actor 集合生成 speeches；mode: ok | missing | duplicate
+    function simpleModeResponder(mode, verdict, answer) {
+      return opts => {
+        const sys = opts.ordered_prompts[0].content;
+        if (sys.includes('peer-batch-v1')) {
+          const ids = [...new Set((sys.match(/ai-\d+/g) || []))];
+          let speeches = ids.map(id => ({ actor_id: id, text: '来自 ' + id + ' 的合并发言。' }));
+          if (mode === 'missing') speeches = speeches.slice(1); // 缺第一个抽中角色
+          if (mode === 'duplicate' && ids.length >= 2) speeches = [{ actor_id: ids[0], text: '重复。' }, { actor_id: ids[0], text: '重复。' }];
+          return Promise.resolve(JSON.stringify({ protocol: 'peer-batch-v1', speeches: speeches }));
+        }
+        if (sys.includes('peer-speech-v1')) return Promise.resolve(peerSpeechJson('单伙伴发言。', sys));
+        return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), verdict, answer));
+      };
+    }
+
+    t9('设置切换到简单模式：mode 写入状态且重置不清空', async () => {
+      await mountApp({ tavern: 'full' });
+      assert(JSON.parse(win().serializeState()).mode === 'real', '默认应为真实模式');
+      setSimpleMode(true);
+      assert(JSON.parse(win().serializeState()).mode === 'simple', '切换后应为简单模式');
+      win().clearDialogueHistory(); // 重置是游戏过程恢复，偏好不清空
+      assert(JSON.parse(win().serializeState()).mode === 'simple', '重置不应清空模式偏好');
+      setSimpleMode(false); // 恢复默认，不影响后续断言
+    });
+    t9('简单模式三伙伴全抽中：一次合并请求，发言按队列序入记录', async () => {
+      await mountApp({ tavern: 'full' });
+      setSimpleMode(true);
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([true, true, true]);
+      win().__tavernMock.generateRawResponder = simpleModeResponder('ok', 'yes', '方向正确。');
+      const base = recordCount();
+      await sendQuestion('合并请求测试：男子的过去与海有关吗？');
+      await waitForRecords(base + 8, 30000); // 玩家 + 3 伙伴发言 + 4 判定
+      const calls = win().__tavernMock.generateRawCalls;
+      assert(calls.length === 2, '简单模式应为 1 次合并 + 1 次主持人共 2 次请求，实际 ' + calls.length);
+      assert(calls[0].generation_id.indexOf('-peer-batch') >= 0, '第 1 次请求应为伙伴合并请求');
+      assert(calls[0].ordered_prompts[0].content.includes('peer-batch-v1'), '合并请求 system 应为 peer-batch-v1 协议');
+      assert(!calls[0].ordered_prompts[0].content.includes(SECRET_MARK) && !calls[0].ordered_prompts[1].content.includes(SECRET_MARK), '合并请求不得包含汤底');
+      const state = JSON.parse(win().serializeState());
+      const tail = state.records.slice(-8);
+      const speeches = tail.filter(r => r.type === 'peer_discussion');
+      assert(speeches.length === 3 && speeches[0].speakerId === 'ai-1' && speeches[1].speakerId === 'ai-2' && speeches[2].speakerId === 'ai-3', '发言应按队列顺序写入');
+    });
+    t9('缺 actor_id 的批次响应整批拒绝，主持人仍回答玩家问题', async () => {
+      await mountApp({ tavern: 'full' });
+      setSimpleMode(true);
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([true, true, true]);
+      win().__tavernMock.generateRawResponder = simpleModeResponder('missing', 'no', '否。');
+      const base = recordCount();
+      await sendQuestion('缺 ID 测试：这次批次少一个人。');
+      await waitForRecords(base + 3, 30000); // 玩家 + 批次失败记录 + 玩家判定
+      assert(win().__tavernMock.calls.generateRaw === 2, '应为合并 + 主持人共 2 次请求');
+      const last = lastRecord();
+      assert(last.classList.contains('is-verdict'), '整批拒绝后主持人仍应回答玩家问题');
+      const state = JSON.parse(win().serializeState());
+      const failRec = state.records.slice(-3)[1];
+      assert(failRec.type === 'system' && /数量与抽样队列不符|遗漏/.test(failRec.text), '批次失败记录不符: ' + failRec.text);
+    });
+    t9('重复 actor_id 的批次响应整批拒绝', async () => {
+      await mountApp({ tavern: 'full' });
+      setSimpleMode(true);
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([true, true, false]); // 队列 [ai-1, ai-2]
+      win().__tavernMock.generateRawResponder = simpleModeResponder('duplicate', 'no', '否。');
+      const base = recordCount();
+      await sendQuestion('重复 ID 测试：批次里 ai-1 出现两次。');
+      await waitForRecords(base + 3, 30000);
+      const state = JSON.parse(win().serializeState());
+      const failRec = state.records.slice(-3)[1];
+      assert(failRec.type === 'system' && /重复 actor_id/.test(failRec.text), '重复检测记录不符: ' + failRec.text);
+      assert(lastRecord().classList.contains('is-verdict'), '拒绝后主持人仍回答玩家问题');
+    });
+    t9('简单模式安静回合：无抽中则不发合并请求', async () => {
+      await mountApp({ tavern: 'full' });
+      setSimpleMode(true);
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([false, false, false]);
+      win().__tavernMock.generateRawResponder = simpleModeResponder('ok', 'no', '否。');
+      const base = recordCount();
+      await sendQuestion('安静回合测试：大家都不说话。');
+      await waitForRecords(base + 2, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 1, '安静回合应只有主持人 1 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+    });
+    t9('真实模式回归：切回后恢复逐角色请求', async () => {
+      await mountApp({ tavern: 'full' });
+      setSimpleMode(true);
+      setSimpleMode(false); // 切回真实模式
+      assert(JSON.parse(win().serializeState()).mode === 'real', '应切回真实模式');
+      win().TurtleApp.debug.peerRandom = fixedPeerSample([true, true, true]);
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：逐个发言。', 'yes', '回答。');
+      const base = recordCount();
+      await sendQuestion('真实回归测试：汤是热的吗？');
+      await waitForRecords(base + 8, 30000);
+      assert(win().__tavernMock.calls.generateRaw === 4, '真实模式应为 3 伙伴 + 1 主持人共 4 次请求，实际 ' + win().__tavernMock.calls.generateRaw);
+    });
+
     // ================= 运行与渲染 =================
     function renderSkeleton() {
       const container = document.getElementById('groups');
