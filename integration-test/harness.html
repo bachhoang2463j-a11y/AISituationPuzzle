@@ -416,6 +416,14 @@
           const sumId = (/【总结者ID】(ai-\d+|host)/.exec(user) || [])[1] || 'host';
           return mockLlmResponse(JSON.stringify({ protocol: 'note-ops-v1', round_id: roundId, summarizer_id: sumId, operations: [] }));
         }
+        if (sys.includes('chat-reply-v1') || sys.includes('chat-batch-v1')) {
+          if (sys.includes('chat-batch-v1')) {
+            const ids = [...new Set((sys.match(/ai-\d+/g) || []))];
+            return mockLlmResponse(JSON.stringify({ protocol: 'chat-batch-v1', speeches: ids.map(id => ({ actor_id: id, kind: 'chat', text: '来自 ' + id + ' 的闲聊。' })) }));
+          }
+          const actorId = (/\"actor_id\":\"(ai-\d+|host)\"/.exec(sys) || [])[1] || 'host';
+          return mockLlmResponse(JSON.stringify({ protocol: 'chat-reply-v1', actor_id: actorId, kind: 'chat', text: '来自 ' + actorId + ' 的闲聊回应。' }));
+        }
         return mockLlmResponse(v2AnswerJson(extractLedger(body.messages[1].content), verdict, answer));
       };
     }
@@ -434,7 +442,7 @@
         return Promise.resolve(JSON.stringify(body));
       };
     }
-    // 全能 responder：peer / peer-batch / host / summary 一体分发
+    // 全能 responder：peer / peer-batch / host / summary / chat 一体分发
     function smartTavernResponder(peerText, verdict, answer) {
       return opts => {
         const sys = opts.ordered_prompts[0].content;
@@ -444,6 +452,14 @@
           return Promise.resolve(JSON.stringify({ protocol: 'peer-batch-v1', speeches: ids.map(id => ({ actor_id: id, text: peerText })) }));
         }
         if (sys.includes('note-ops-v1')) return summarizeResponder('ok')(opts);
+        if (sys.includes('chat-reply-v1') || sys.includes('chat-batch-v1')) {
+          if (sys.includes('chat-batch-v1')) {
+            const ids = [...new Set((sys.match(/ai-\d+/g) || []))];
+            return Promise.resolve(JSON.stringify({ protocol: 'chat-batch-v1', speeches: ids.map(id => ({ actor_id: id, kind: 'chat', text: '来自 ' + id + ' 的闲聊。' })) }));
+          }
+          const actorId = (/\"actor_id\":\"(ai-\d+|host)\"/.exec(sys) || [])[1] || 'host';
+          return Promise.resolve(JSON.stringify({ protocol: 'chat-reply-v1', actor_id: actorId, kind: 'chat', text: '来自 ' + actorId + ' 的闲聊回应。' }));
+        }
         return Promise.resolve(v2AnswerJson(extractLedger(opts.ordered_prompts[1].content), verdict, answer));
       };
     }
@@ -1174,6 +1190,100 @@
       assert(state.notes.length === before, '便签墙应保持原状');
       const last = lastRecord();
       assert(last.querySelector('.item-text').textContent.includes('总结者失败'), '应有总结失败记录');
+    });
+
+    // ================= 组 11：闲聊模式（第 11 轮验收） =================
+    const t11 = group('第 11 轮 · 闲聊模式（输入级开关）');
+
+    function setChatMode(on) {
+      doc().getElementById('chat-mode').checked = on;
+    }
+    async function fullRound() {
+      const base = recordCount();
+      await sendQuestion('先完成一轮解题：男子出过海吗？');
+      await waitForRecords(base + 4, 30000);
+      await sleep(300); // 等总结阶段
+      return JSON.parse(win().serializeState());
+    }
+
+    t11('闲聊回合：主持人+全部伙伴各回应一次，不触发判定', async () => {
+      await mountApp({ tavern: 'full' });
+      win().__tavernMock.generateRawResponder = smartTavernResponder('我想问：解题发言。', 'yes', '判定。');
+      const before = await fullRound();
+      const genBefore = win().__tavernMock.calls.generateRaw;
+      const notesBefore = before.notes.length;
+
+      setChatMode(true);
+      win().__tavernMock.generateRawResponder = smartTavernResponder('不应作为解题发言', 'no', '不应判定');
+      const base = recordCount();
+      await sendQuestion('闲聊一下：今晚天气不错。');
+      await waitForRecords(base + 5, 30000); // 玩家闲聊 + 主持 + 3 伙伴回应
+      const calls = win().__tavernMock.generateRawCalls.slice(genBefore);
+      assert(calls.length === 4, '真实模式闲聊应为主持人 + 3 伙伴共 4 次请求，实际 ' + calls.length);
+      assert(calls.every(c => c.ordered_prompts[0].content.includes('chat-')), '闲聊请求应使用 chat 协议');
+      assert(!calls.some(c => c.ordered_prompts[0].content.includes('host-answer-v2')), '闲聊不应触发主持人判定请求');
+      const state = JSON.parse(win().serializeState());
+      const tail = state.records.slice(-5);
+      assert(tail.every(r => r.type === 'chat'), '闲聊回合记录应全部标记为 chat');
+      assert(state.phase === 'awaiting-player', '闲聊后应回到等待玩家');
+    });
+    t11('闲聊不消耗游戏回合、不改便签、不入问题账本', async () => {
+      const before = await fullRound(); // 复用上一挂载，先跑一轮解题
+      const turnBefore = JSON.parse(win().serializeState()).turn;
+      const notesBefore = JSON.parse(win().serializeState()).notes.length;
+      const genBefore = win().__tavernMock.calls.generateRaw;
+
+      setChatMode(true);
+      await sendQuestion('再闲聊一句：这汤闻着真香。');
+      await sleep(3000); // 闲聊请求为微任务级
+      const state = JSON.parse(win().serializeState());
+      assert(state.turn === turnBefore, '闲聊不应增加游戏回合 turn');
+      assert(state.notes.length === notesBefore, '闲聊不应修改便签墙');
+      assert(state.request === null, '闲聊结束后请求应清空');
+      // 记录里没有新的 verdict / question 类型
+      const newRecords = state.records.filter(r => !before.records.some(o => o.id === r.id));
+      assert(newRecords.every(r => r.type === 'chat' || r.type === 'system'), '闲聊回合不应产生判定或提问记录');
+    });
+    t11('闲聊请求无汤底', async () => {
+      // 复用上一挂载的闲聊请求记录
+      const calls = win().__tavernMock.generateRawCalls;
+      const chatCalls = calls.filter(c => c.ordered_prompts[0].content.includes('chat-reply-v1') || c.ordered_prompts[0].content.includes('chat-batch-v1'));
+      assert(chatCalls.length >= 4, '应有闲聊请求记录');
+      chatCalls.forEach(c => {
+        const sys = c.ordered_prompts[0].content;
+        const user = c.ordered_prompts[1].content;
+        assert(!sys.includes('<TURTLE_SECRET>') && !sys.includes(SECRET_MARK), '闲聊 system 不得含汤底');
+        assert(!user.includes(SECRET_MARK), '闲聊 user 不得含汤底');
+      });
+    });
+    t11('闲聊结束后可继续解题（开关只影响当次输入）', async () => {
+      setChatMode(false); // 开关关闭
+      assert(!doc().getElementById('chat-mode').checked, '开关应为关闭');
+      const base = recordCount();
+      await sendQuestion('继续解题：男子晕船吗？');
+      await waitForRecords(base + 4, 30000);
+      await sleep(300);
+      const state = JSON.parse(win().serializeState());
+      const tail = state.records.slice(-4);
+      assert(tail[0].type === 'question', '应恢复正常解题回合');
+      assert(state.records.some(r => r.type === 'verdict' && r.text.includes('判定') === false ? false : r.type === 'verdict'), '应有判定记录');
+    });
+    t11('简单模式闲聊：主持人单独 + 伙伴合并，回应数量符合配置', async () => {
+      await mountApp({ tavern: 'full' });
+      setSimpleMode(true);
+      win().__tavernMock.generateRawResponder = smartTavernResponder('闲聊发言。', 'no', '不应判定');
+      const genBefore = win().__tavernMock.calls.generateRaw;
+      setChatMode(true);
+      const base = recordCount();
+      await sendQuestion('简单模式闲聊：大家喝点什么？');
+      await waitForRecords(base + 5, 30000); // 玩家 + 主持 + 3 伙伴
+      const calls = win().__tavernMock.generateRawCalls.slice(genBefore);
+      assert(calls.length === 2, '简单模式闲聊应为主持人单独 1 次 + 伙伴合并 1 次共 2 次请求，实际 ' + calls.length);
+      assert(calls[0].ordered_prompts[0].content.includes('chat-reply-v1'), '第 1 次应为主持人单独闲聊');
+      assert(calls[1].ordered_prompts[0].content.includes('chat-batch-v1'), '第 2 次应为伙伴合并闲聊');
+      const state = JSON.parse(win().serializeState());
+      const chatReplies = state.records.slice(-4).filter(r => r.type === 'chat' && r.speakerId !== 'player');
+      assert(chatReplies.length === 4, '主持人与 3 伙伴都应恰好回应一次，实际 ' + chatReplies.length);
     });
 
     // ================= 运行与渲染 =================

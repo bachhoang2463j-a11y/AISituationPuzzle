@@ -878,6 +878,26 @@
       box-shadow: 0 6px 22px var(--accent-gold-glow);
     }
 
+    /* 输入级闲聊开关（贴合基线风格的小胶囊） */
+    .chat-mode-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: linear-gradient(135deg, rgba(58, 44, 36, 0.7) 0%, rgba(40, 30, 24, 0.8) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 0 0.85rem;
+      border-radius: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+      user-select: none;
+      transition: var(--transition-fast);
+    }
+    .chat-mode-toggle:hover { border-color: var(--accent-gold); color: #fbbf24; }
+    .chat-mode-toggle input { accent-color: var(--accent-gold); cursor: pointer; }
+
     /* =========================================================
        右侧：1/5 对话记录区 (微透明通透磨砂侧栏 & 渐变卡片)
        ========================================================= */
@@ -1805,6 +1825,10 @@
         <!-- 底部推演发言输入栏 -->
         <div class="stage-control-bar">
           <div class="input-form">
+            <label class="chat-mode-toggle" title="仅本次输入以朋友口吻闲聊，不进行谜面判定、不消耗游戏回合">
+              <input type="checkbox" id="chat-mode">
+              <span>💬 闲聊</span>
+            </label>
             <div class="input-wrapper">
               <span class="input-prefix">❓ 提问或推理：</span>
               <input type="text" id="player-input" placeholder="输入可用‘是/否/无关’回答的问题，或直接猜出真相..." autocomplete="off">
@@ -2515,6 +2539,12 @@
         if (!text) return;
         if (GameState.phase !== "awaiting-player" || GameState.request) return; // 阶段守卫：非法阶段不触发新回合
 
+        const chatCheck = document.getElementById("chat-mode");
+        if (chatCheck && chatCheck.checked) {
+          await runChatRound(text);
+          return;
+        }
+
         inputEl.value = "";
         dispatch({ type: GameAction.SUBMIT_QUESTION, text: text });
         const request = GameState.request;
@@ -2595,6 +2625,76 @@
       });
     }
 
+    // 第 11 轮：闲聊回合——主持人与所有启用伙伴各回应一次（简单模式伙伴合并），不判定、不消耗游戏回合
+    async function runChatRound(text) {
+      const inputEl = document.getElementById("player-input");
+      inputEl.value = "";
+      dispatch({ type: GameAction.CHAT_SUBMIT, text: text });
+      const request = GameState.request;
+      render();
+
+      const adapter = pickHostAdapter();
+      const controller = (typeof AbortController === "function") ? new AbortController() : null;
+      if (controller) request.abortController = controller;
+      const timeoutMs = (window.TurtleApp.debug && window.TurtleApp.debug.hostTimeoutMs) || HOST_TIMEOUT_MS;
+      request.timeoutId = setTimeout(() => {
+        if (GameState.request === request) {
+          dispatch({ type: GameAction.CHAT_DONE }); // 超时直接结束闲聊，回到可操作状态
+        }
+      }, timeoutMs);
+
+      // 主持人先回应（单独请求，即使简单模式）
+      try {
+        const reply = await adapter.chat("host", {
+          generationId: request.id + "-chat-host",
+          signal: controller ? controller.signal : undefined,
+          chatText: text
+        });
+        if (GameState.request !== request) return;
+        dispatch({ type: GameAction.CHAT_RESPONSE, speech: reply });
+      } catch (err) {
+        if (GameState.request !== request) return;
+        dispatch({ type: GameAction.CHAT_FAILED, error: err, actorId: "host" });
+      }
+
+      // 伙伴回应：真实模式逐个，简单模式合并
+      const peerIds = activePeerIds();
+      if (GameState.request !== request) return;
+      if (peerIds.length) {
+        if (GameState.mode === "simple") {
+          try {
+            const speeches = await adapter.chatBatch(peerIds, {
+              generationId: request.id + "-chat-batch",
+              signal: controller ? controller.signal : undefined,
+              chatText: text
+            });
+            if (GameState.request !== request) return;
+            speeches.forEach(s => dispatch({ type: GameAction.CHAT_RESPONSE, speech: s }));
+          } catch (err) {
+            if (GameState.request !== request) return;
+            dispatch({ type: GameAction.CHAT_FAILED, error: err, batch: true });
+          }
+        } else {
+          for (const actorId of peerIds) {
+            try {
+              const reply = await adapter.chat(actorId, {
+                generationId: request.id + "-chat-" + actorId,
+                signal: controller ? controller.signal : undefined,
+                chatText: text
+              });
+              if (GameState.request !== request) return;
+              dispatch({ type: GameAction.CHAT_RESPONSE, speech: reply });
+            } catch (err) {
+              if (GameState.request !== request) return;
+              dispatch({ type: GameAction.CHAT_FAILED, error: err, actorId: actorId });
+            }
+          }
+        }
+      }
+      if (GameState.request !== request) return;
+      dispatch({ type: GameAction.CHAT_DONE });
+    }
+
     // 每轮为每个启用伙伴独立抽取一次 Bernoulli(0.5)；测试可经 TurtleApp.debug.peerRandom 注入确定性随机源
     function sampleSpeakers() {
       const random = (window.TurtleApp.debug && typeof window.TurtleApp.debug.peerRandom === "function")
@@ -2620,6 +2720,13 @@
         }
         try { TavernAdapter.stop(request.id + "-host"); } catch (e) {}
         try { TavernAdapter.stop(request.id + "-summary"); } catch (e) {}
+        if (request.type === "chat") {
+          try { TavernAdapter.stop(request.id + "-chat-host"); } catch (e) {}
+          try { TavernAdapter.stop(request.id + "-chat-batch"); } catch (e) {}
+          (request.chatQueue || []).forEach(actorId => {
+            try { TavernAdapter.stop(request.id + "-chat-" + actorId); } catch (e) {}
+          });
+        }
       }
       if (GameState.request === request) {
         dispatch({ type: GameAction.HOST_ABORTED });
@@ -2639,6 +2746,10 @@
       HOST_ABORTED: "host-aborted",
       SUMMARY_DONE: "summary-done",
       SUMMARY_FAILED: "summary-failed",
+      CHAT_SUBMIT: "chat-submit",
+      CHAT_RESPONSE: "chat-response",
+      CHAT_FAILED: "chat-failed",
+      CHAT_DONE: "chat-done",
       PLAYER_NOTE_UPDATE: "player-note-update",
       PLAYER_NOTE_REMOVE: "player-note-remove",
       RESET_GAME: "reset-game",
@@ -2762,6 +2873,57 @@
             verdict: null
           });
           GameState.phase = "awaiting-player";
+          break;
+
+        case GameAction.CHAT_SUBMIT:
+          // 闲聊：不增加 turn、不入问题账本、不改便签；记录 type 标记为 chat
+          GameState.records.push({
+            id: Date.now(),
+            speakerId: "player",
+            speakerName: "我 (YOU)",
+            text: action.text,
+            type: "chat",
+            verdict: null
+          });
+          setBubbleState("player", "我", action.text, null);
+          GameState.phase = "chat-batch";
+          GameState.request = {
+            id: "chat-" + (++requestSeq), type: "chat", startedAt: Date.now(), abortRequested: false,
+            timeoutId: null, abortController: null,
+            chatQueue: ["host"].concat(activePeerIds()) // 主持人与所有启用伙伴各回应一次，不用抽样
+          };
+          triggerSpeakingFx("player");
+          break;
+
+        case GameAction.CHAT_RESPONSE: {
+          const speech = action.speech;
+          GameState.records.push({
+            id: Date.now() + 7,
+            speakerId: speech.actorId,
+            speakerName: charactersData[speech.actorId] ? charactersData[speech.actorId].name : speech.actorId,
+            text: speech.text,
+            type: "chat",
+            verdict: null
+          });
+          setBubbleState(speech.actorId, charactersData[speech.actorId] ? charactersData[speech.actorId].name : speech.actorId, speech.text, null);
+          triggerSpeakingFx(speech.actorId);
+          break;
+        }
+
+        case GameAction.CHAT_FAILED:
+          GameState.records.push({
+            id: Date.now() + 8,
+            speakerId: "system",
+            speakerName: "系统",
+            text: (action.actorId ? "闲聊回应失败（" + (charactersData[action.actorId] ? charactersData[action.actorId].name : action.actorId) + "）" : "闲聊批次失败") + "：" + (action.error && action.error.message ? action.error.message : "未知错误"),
+            type: "system",
+            verdict: null
+          });
+          break;
+
+        case GameAction.CHAT_DONE:
+          if (GameState.request) { clearTimeout(GameState.request.timeoutId); GameState.request = null; }
+          GameState.phase = "awaiting-player"; // 闲聊结束回到等待玩家，上一轮解题状态不受影响
           break;
 
         case GameAction.PLAYER_NOTE_UPDATE: {
@@ -3070,6 +3232,28 @@
         return parseNoteOpsV1(raw, ctx);
       },
 
+      // 闲聊：朋友口吻回应，无汤底不判定
+      async chat(actorId, opts) {
+        opts = opts || {};
+        const prompts = [
+          { role: "system", content: buildChatSystemPrompt(actorId) },
+          { role: "user", content: buildChatUserPrompt(opts.chatText || "") }
+        ];
+        const raw = await this.generate(prompts, { generationId: opts.generationId });
+        return parseChatReplyV1(raw, actorId);
+      },
+
+      // 简单模式闲聊：伙伴合并请求（主持人仍单独）
+      async chatBatch(actorIds, opts) {
+        opts = opts || {};
+        const prompts = [
+          { role: "system", content: buildChatBatchSystemPrompt(actorIds) },
+          { role: "user", content: buildChatUserPrompt(opts.chatText || "") }
+        ];
+        const raw = await this.generate(prompts, { generationId: opts.generationId });
+        return parseChatBatchV1(raw, actorIds);
+      },
+
       // 主持人聚合判定：与 DirectApiAdapter / MockAdapter 同接口
       async hostEvaluate(questionText, opts) {
         opts = opts || {};
@@ -3270,6 +3454,16 @@
       summarize(ctx, opts) {
         return Promise.resolve([]); // 演示总结者：不产生便签操作
       },
+      chat(actorId, opts) {
+        return new Promise(resolve => {
+          setTimeout(() => resolve({ actorId: actorId, text: "（笑）说得也是，先不想谜题了，喝口热茶吧。" }), 700);
+        });
+      },
+      chatBatch(actorIds, opts) {
+        return new Promise(resolve => {
+          setTimeout(() => resolve(actorIds.map(id => ({ actorId: id, text: "（笑）" + (charactersData[id] ? charactersData[id].name : id) + " 附议，先歇会儿。" }))), 900);
+        });
+      },
       hostEvaluate(questionText, opts) {
         opts = opts || {};
         const ledger = opts.ledger || [];
@@ -3324,10 +3518,72 @@
       summarize(ctx, opts) {
         return requestSummarizeFromApi(ctx, opts);
       },
+      chat(actorId, opts) {
+        return requestChatFromApi(actorId, opts);
+      },
+      chatBatch(actorIds, opts) {
+        return requestChatBatchFromApi(actorIds, opts);
+      },
       hostEvaluate(questionText, opts) {
         return requestHostFromApi(questionText, opts);
       }
     };
+
+    async function requestChatFromApi(actorId, opts) {
+      opts = opts || {};
+      const cfg = globalApiConfig;
+      const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
+      const headers = { "Content-Type": "application/json" };
+      if (cfg.apiKey) headers["Authorization"] = "Bearer " + cfg.apiKey;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: headers,
+        signal: opts.signal,
+        body: JSON.stringify({
+          model: cfg.model || "gpt-4o",
+          temperature: cfg.temperature,
+          messages: [
+            { role: "system", content: buildChatSystemPrompt(actorId) },
+            { role: "user", content: buildChatUserPrompt(opts.chatText || "") }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+      if (!res.ok) throw new Error("API 返回 HTTP " + res.status);
+      const data = await res.json();
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : "";
+      return parseChatReplyV1(String(content || ""), actorId);
+    }
+
+    async function requestChatBatchFromApi(actorIds, opts) {
+      opts = opts || {};
+      const cfg = globalApiConfig;
+      const url = cfg.baseUrl.replace(/\/+$/, "") + "/chat/completions";
+      const headers = { "Content-Type": "application/json" };
+      if (cfg.apiKey) headers["Authorization"] = "Bearer " + cfg.apiKey;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: headers,
+        signal: opts.signal,
+        body: JSON.stringify({
+          model: cfg.model || "gpt-4o",
+          temperature: cfg.temperature,
+          messages: [
+            { role: "system", content: buildChatBatchSystemPrompt(actorIds) },
+            { role: "user", content: buildChatUserPrompt(opts.chatText || "") }
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+      if (!res.ok) throw new Error("API 返回 HTTP " + res.status);
+      const data = await res.json();
+      const content = data && data.choices && data.choices[0] && data.choices[0].message
+        ? data.choices[0].message.content : "";
+      return parseChatBatchV1(String(content || ""), actorIds);
+    }
 
     async function requestSummarizeFromApi(ctx, opts) {
       opts = opts || {};
@@ -3542,6 +3798,89 @@
         if (!byId[id]) throw new Error("伙伴批次遗漏 actor_id: " + id);
       });
       return expectedIds.map(id => byId[id]); // 按队列顺序返回
+    }
+
+    // --- 第 11 轮：闲聊协议（朋友口吻，无汤底，不判定） ---
+    function buildChatSystemPrompt(actorId) {
+      const char = charactersData[actorId] || {};
+      return [
+        char.prompt || "你是玩家的朋友，正在和大家一起参加海龟汤聚会。",
+        "现在是轻松的闲聊环节：以朋友口吻简短回应玩家的闲聊，自然随性。",
+        "你不能进行谜面判定、不公布线索、不揭示或暗示汤底，也不要试图解题。",
+        '只输出 chat-reply-v1 协议的 JSON 对象：{"protocol":"chat-reply-v1","actor_id":"' + actorId + '","kind":"chat","text":"..."}，不要输出任何其他内容。'
+      ].join("\n");
+    }
+
+    function buildChatUserPrompt(chatText) {
+      const lines = ["【汤面】" + GameState.soup.surface, "【公开记录】"];
+      GameState.records.forEach(item => {
+        if (item.type === "question" || item.type === "verdict" || item.type === "peer_discussion" || item.type === "chat") {
+          lines.push((item.type === "verdict" ? "主持人：" : item.speakerName + "：") + item.text);
+        }
+      });
+      lines.push("【玩家闲聊】" + chatText);
+      return lines.join("\n");
+    }
+
+    function parseChatReplyV1(content, expectedActorId) {
+      const start = content.indexOf("{");
+      const end = content.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("闲聊响应不是 JSON");
+      let parsed;
+      try {
+        parsed = JSON.parse(content.slice(start, end + 1));
+      } catch (e) {
+        throw new Error("闲聊响应 JSON 解析失败");
+      }
+      if (parsed.protocol !== "chat-reply-v1") throw new Error("闲聊响应协议不是 chat-reply-v1");
+      if (parsed.actor_id !== expectedActorId) throw new Error("闲聊响应 actor_id 不匹配（期望 " + expectedActorId + "）");
+      const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+      if (!text) throw new Error("闲聊响应 text 为空");
+      return { actorId: parsed.actor_id, text: text };
+    }
+
+    // 简单模式：一次请求合并伙伴闲聊（主持人仍单独请求，SPEC 4.3）
+    function buildChatBatchSystemPrompt(actorIds) {
+      const roles = actorIds.map(id => {
+        const char = charactersData[id] || {};
+        return id + "（" + (char.name || id) + "）：" + (char.prompt || "你是玩家的朋友。");
+      });
+      return [
+        "你将在同一次回复中分别扮演多名玩家的朋友，现在是轻松的闲聊环节：每人以朋友口吻简短回应玩家的闲聊。",
+        "参与角色（每人必须恰好回应一次，不得代答、不得遗漏）：",
+        ...roles.map(r => "  - " + r),
+        "所有角色都不进行谜面判定、不公布线索、不揭示或暗示汤底。",
+        '只输出 chat-batch-v1 协议的 JSON 对象：{"protocol":"chat-batch-v1","speeches":[{"actor_id":"ai-1","kind":"chat","text":"..."}]}，speeches 必须且只能包含上述每个 actor_id 各一次，不要输出任何其他内容。'
+      ].join("\n");
+    }
+
+    function parseChatBatchV1(content, expectedIds) {
+      const start = content.indexOf("{");
+      const end = content.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("闲聊批次响应不是 JSON");
+      let parsed;
+      try {
+        parsed = JSON.parse(content.slice(start, end + 1));
+      } catch (e) {
+        throw new Error("闲聊批次响应 JSON 解析失败");
+      }
+      if (parsed.protocol !== "chat-batch-v1") throw new Error("闲聊批次响应协议不是 chat-batch-v1");
+      const speeches = Array.isArray(parsed.speeches) ? parsed.speeches : null;
+      if (!speeches || speeches.length !== expectedIds.length) {
+        throw new Error("闲聊 speeches 数量与队列不符（期望 " + expectedIds.length + " 条）");
+      }
+      const byId = {};
+      speeches.forEach(s => {
+        const text = typeof s.text === "string" ? s.text.trim() : "";
+        if (!text) throw new Error("闲聊批次存在空 text");
+        if (expectedIds.indexOf(s.actor_id) < 0) throw new Error("闲聊批次含未知 actor_id: " + s.actor_id);
+        if (byId[s.actor_id]) throw new Error("闲聊批次重复 actor_id: " + s.actor_id);
+        byId[s.actor_id] = { actorId: s.actor_id, text: text };
+      });
+      expectedIds.forEach(id => {
+        if (!byId[id]) throw new Error("闲聊批次遗漏 actor_id: " + id);
+      });
+      return expectedIds.map(id => byId[id]);
     }
 
     // --- 第 10 轮：note-ops-v1 总结者协议（只返回便签操作，不接触汤底） ---
